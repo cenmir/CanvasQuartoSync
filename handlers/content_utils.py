@@ -163,17 +163,21 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
     try:
         if ext == '.qmd':
             post = frontmatter.load(abs_target_path)
-            # Default title from frontmatter or filename
-            target_title = post.metadata.get('title', os.path.splitext(filename)[0])
             canvas_meta = post.metadata.get('canvas', {})
+            # Title can be under canvas or at root
+            target_title = canvas_meta.get('title') or post.metadata.get('title') or parse_module_name(os.path.splitext(filename)[0])
             target_type = canvas_meta.get('type', 'page') # Default to page if unspecified
 
         elif ext == '.json':
-            # Assume Quiz
+            # Check if New Quiz JSON
             with open(abs_target_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            target_title = data.get('canvas', {}).get('title', os.path.splitext(filename)[0])
-            target_type = 'quiz'
+            canvas_meta = data.get('canvas', {})
+            target_title = canvas_meta.get('title', parse_module_name(os.path.splitext(filename)[0]))
+            if canvas_meta.get('quiz_engine') == 'new':
+                target_type = 'new_quiz'
+            else:
+                target_type = 'quiz'
             
         else:
             # Unknown content type, treat as file upload?
@@ -232,6 +236,37 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
              print(f"    + [Stub] Creating Quiz: {target_title}")
              target_obj = course.create_quiz(quiz={'title': target_title, 'published': False, 'quiz_type': 'assignment'})
         
+        canvas_url = target_obj.html_url
+
+    elif target_type == 'new_quiz':
+        # New Quizzes are assignment-backed. Search assignments.
+        assignments = course.get_assignments(search_term=target_title)
+        target_obj = None
+        for a in assignments:
+            if a.name == target_title:
+                target_obj = a
+                break
+        
+        if not target_obj:
+            print(f"    + [Stub] Creating New Quiz: {target_title}")
+            from handlers.new_quiz_api import NewQuizAPIClient
+            api_url = os.environ.get("CANVAS_API_URL")
+            api_token = os.environ.get("CANVAS_API_TOKEN")
+            client = NewQuizAPIClient(api_url, api_token)
+            
+            # Create stub using New Quiz API
+            quiz_payload = {
+                'title': target_title,
+                'published': False
+            }
+            try:
+                created_quiz = client.create_quiz(course.id, quiz_payload)
+                # Client returns dict. Need to fetch the assignment to get html_url
+                target_obj = course.get_assignment(created_quiz['id'])
+            except Exception as e:
+                print(f"    ! Error creating New Quiz stub: {e}")
+                return canvas_url
+                
         canvas_url = target_obj.html_url
 
     return canvas_url

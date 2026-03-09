@@ -135,9 +135,23 @@ class NewQuizHandler(BaseHandler):
                     print(f"    -> Updating New Quiz: {title} (ID: {existing_id})")
                     quiz_obj = client.update_quiz(course_id, existing_id, quiz_payload)
                 else:
-                    print(f"    -> Creating New Quiz: {title}")
-                    quiz_obj = client.create_quiz(course_id, quiz_payload)
-                    existing_id = str(quiz_obj['id'])
+                    # Fallback title search to adopt stubs
+                    assignments = course.get_assignments(search_term=title)
+                    stub_assignment = None
+                    for a in assignments:
+                        if a.name == title:
+                            stub_assignment = a
+                            break
+                    
+                    if stub_assignment:
+                        existing_id = str(stub_assignment.id)
+                        print(f"    -> Adopting New Quiz stub: {title} (ID: {existing_id})")
+                        quiz_obj = client.update_quiz(course_id, existing_id, quiz_payload)
+                    else:
+                        print(f"    -> Creating New Quiz: {title}")
+                        quiz_obj = client.create_quiz(course_id, quiz_payload)
+                        existing_id = str(quiz_obj['id'])
+                    
                     map_entry = None  # Clear stale item IDs — new quiz has no items yet
                 
                 # Sync questions
