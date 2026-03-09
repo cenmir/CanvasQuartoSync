@@ -4,6 +4,7 @@ import frontmatter
 import re
 import shutil
 from canvasapi import Canvas
+from canvasapi.exceptions import BadRequest
 from handlers.base_handler import BaseHandler
 from handlers.content_utils import process_content, safe_delete_file, safe_delete_dir, get_mapped_id, save_mapped_id, parse_module_name
 
@@ -73,7 +74,15 @@ class PageHandler(BaseHandler):
 
             if page_obj: # Found in Canvas but needs update
                 print(f"    -> Updating existing page: {title} (ID: {page_obj.page_id})")
-                page_obj.edit(**page_args)
+                try:
+                    page_obj.edit(**page_args)
+                except BadRequest as e:
+                    if '"published"' in str(e):
+                        print(f"    ⚠ Warning: Cannot change published state (page may be the course front page). Syncing content only.")
+                        page_args['wiki_page'].pop('published', None)
+                        page_obj.edit(**page_args)
+                    else:
+                        raise
             else:
                 # 4b. Double check Title Search if not found by ID
                 pages = course.get_pages(search_term=title)
@@ -85,7 +94,15 @@ class PageHandler(BaseHandler):
                 
                 if existing_item:
                     print(f"    -> Updating existing page (by title): {title} (ID: {existing_item.page_id})")
-                    existing_item.edit(**page_args)
+                    try:
+                        existing_item.edit(**page_args)
+                    except BadRequest as e:
+                        if '"published"' in str(e):
+                            print(f"    ⚠ Warning: Cannot change published state (page may be the course front page). Syncing content only.")
+                            page_args['wiki_page'].pop('published', None)
+                            existing_item.edit(**page_args)
+                        else:
+                            raise
                     page_obj = existing_item
                 else:
                     print(f"    -> Creating new page: {title}")

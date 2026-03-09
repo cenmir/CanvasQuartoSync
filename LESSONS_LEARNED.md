@@ -11,6 +11,9 @@ The Canvas REST API **cannot** force-regenerate a quiz snapshot (`quiz_data`) fo
 
 **Current workaround**: Update questions in-place and print a direct URL so the user can click **"Save It Now"** manually in the Canvas UI.
 
+### Front Page Cannot Be Unpublished
+If a page is set as the Canvas course **front page** ("startsida"), the API will reject any update that includes `published: false` with a `BadRequest` error ("Framsidan kan inte avpubliceras"). The sync tool catches this specific error and retries the edit **without** the `published` field, so the page title and body still sync correctly. The `published` state of the front page is left unchanged. This is handled in `PageHandler.sync()`.
+
 ### Published Flag Ignored on Module Item Creation
 The Canvas API silently **ignores** the `published` field when creating a new module item. You must create the item first, then call `.edit(module_item={'published': True/False})` in a second API call. This is implemented in `BaseHandler.add_to_module()`.
 
