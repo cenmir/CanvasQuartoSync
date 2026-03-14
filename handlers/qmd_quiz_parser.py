@@ -8,6 +8,7 @@ using fenced div syntax (:::: question blocks).
 import re
 import yaml
 import textwrap
+from handlers.log import logger
 
 
 def parse_qmd_quiz(content):
@@ -211,7 +212,7 @@ def _parse_formula_blocks(content, question):
             f_data = yaml.safe_load(formula_content) or {}
             question.update(f_data)
         except Exception as e:
-            print(f"Error parsing formula block: {e}")
+            logger.error("Failed to parse formula block: %s", e)
             
     variables = []
     variable_blocks = _extract_inner_divs(content, 'variable')
@@ -224,7 +225,7 @@ def _parse_formula_blocks(content, question):
                 v_data['name'] = name
                 variables.append(v_data)
             except Exception as e:
-                print(f"Error parsing variable block {name}: {e}")
+                logger.error("Failed to parse variable block %s: %s", name, e)
                 
     if variables:
         question['variables'] = variables

@@ -7,6 +7,7 @@ from canvasapi import Canvas
 from canvasapi.exceptions import BadRequest
 from handlers.base_handler import BaseHandler
 from handlers.content_utils import process_content, safe_delete_file, safe_delete_dir, get_mapped_id, save_mapped_id, parse_module_name
+from handlers.log import logger
 
 class PageHandler(BaseHandler):
     def can_handle(self, file_path: str) -> bool:
@@ -14,7 +15,7 @@ class PageHandler(BaseHandler):
             return False
         if os.path.basename(file_path).startswith('_temp_'):
             return False
-        
+
         try:
             post = frontmatter.load(file_path)
             canvas_meta = post.metadata.get('canvas', {})
@@ -24,23 +25,23 @@ class PageHandler(BaseHandler):
 
     def sync(self, file_path: str, course, module=None, canvas_obj=None, content_root=None):
         filename = os.path.basename(file_path)
-        print(f"Syncing Page: {filename}")
-        
+        logger.info("  [cyan]Syncing page:[/cyan] [bold]%s[/bold]", filename)
+
         # 1. Check for Skip (Smart Sync)
         current_mtime = os.path.getmtime(file_path)
         existing_id, map_entry = get_mapped_id(content_root, file_path) if content_root else (None, None)
-        
+
         needs_render = True
         page_obj = None
 
         if existing_id and isinstance(map_entry, dict):
             if map_entry.get('mtime') == current_mtime:
-                print(f"    -> Skipping render (No changes detected).")
+                logger.debug("    No changes detected, skipping render")
                 needs_render = False
                 try:
                     page_obj = course.get_page(existing_id)
                 except:
-                    print(f"    ! Cached Page ID {existing_id} not found. Re-rendering.")
+                    logger.warning("    Previously synced page not found in Canvas, re-syncing")
                     needs_render = True
 
         # 1b. Parse Metadata (Needed for Module indent even if skipping render)
@@ -53,7 +54,7 @@ class PageHandler(BaseHandler):
         # 1c. Process Content (ALWAYS, to track ACTIVE_ASSET_IDS for pruning)
         with open(file_path, 'r', encoding='utf-8') as f:
             raw_content = f.read()
-            
+
         base_path = os.path.dirname(file_path)
         processed_content = process_content(raw_content, base_path, course, content_root=content_root)
 
@@ -73,12 +74,13 @@ class PageHandler(BaseHandler):
             }
 
             if page_obj: # Found in Canvas but needs update
-                print(f"    -> Updating existing page: {title} (ID: {page_obj.page_id})")
+                logger.info("    [yellow]Updating page:[/yellow] %s", title)
+                logger.debug("    Matched by cached ID: %s", page_obj.page_id)
                 try:
                     page_obj.edit(**page_args)
                 except BadRequest as e:
                     if '"published"' in str(e):
-                        print(f"    ⚠ Warning: Cannot change published state (page may be the course front page). Syncing content only.")
+                        logger.warning("    [yellow]Cannot change published state (page may be the course front page). Syncing content only.[/yellow]")
                         page_args['wiki_page'].pop('published', None)
                         page_obj.edit(**page_args)
                     else:
@@ -91,21 +93,22 @@ class PageHandler(BaseHandler):
                     if p.title == title:
                         existing_item = p
                         break
-                
+
                 if existing_item:
-                    print(f"    -> Updating existing page (by title): {title} (ID: {existing_item.page_id})")
+                    logger.info("    [yellow]Updating page:[/yellow] %s", title)
+                    logger.debug("    Matched by title search (ID: %s)", existing_item.page_id)
                     try:
                         existing_item.edit(**page_args)
                     except BadRequest as e:
                         if '"published"' in str(e):
-                            print(f"    ⚠ Warning: Cannot change published state (page may be the course front page). Syncing content only.")
+                            logger.warning("    Cannot change published state (page may be the course front page). Syncing content only.")
                             page_args['wiki_page'].pop('published', None)
                             existing_item.edit(**page_args)
                         else:
                             raise
                     page_obj = existing_item
                 else:
-                    print(f"    -> Creating new page: {title}")
+                    logger.info("    [green]Creating page:[/green] %s", title)
                     page_obj = course.create_page(**page_args)
 
             # 4c. Update Sync Map
@@ -121,6 +124,5 @@ class PageHandler(BaseHandler):
                 'type': 'Page',
                 'page_url': page_obj.url,
                 'title': page_obj.title,
-                'published': published 
+                'published': published
             }, indent=indent)
-

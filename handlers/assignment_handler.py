@@ -7,6 +7,7 @@ from datetime import datetime
 from canvasapi import Canvas
 from handlers.base_handler import BaseHandler
 from handlers.content_utils import process_content, safe_delete_file, safe_delete_dir, get_mapped_id, save_mapped_id, parse_module_name
+from handlers.log import logger
 
 class AssignmentHandler(BaseHandler):
     def can_handle(self, file_path: str) -> bool:
@@ -23,23 +24,23 @@ class AssignmentHandler(BaseHandler):
 
     def sync(self, file_path: str, course, module=None, canvas_obj=None, content_root=None):
         filename = os.path.basename(file_path)
-        print(f"Syncing Assignment: {filename}")
-        
+        logger.info("  [cyan]Syncing assignment:[/cyan] [bold]%s[/bold]", filename)
+
         # 1. Check for Skip (Smart Sync)
         current_mtime = os.path.getmtime(file_path)
         existing_id, map_entry = get_mapped_id(content_root, file_path) if content_root else (None, None)
-        
+
         needs_render = True
         assign_obj = None
 
         if existing_id and isinstance(map_entry, dict):
             if map_entry.get('mtime') == current_mtime:
-                print(f"    -> Skipping render (No changes detected).")
+                logger.debug("    No changes detected, skipping render")
                 needs_render = False
                 try:
                     assign_obj = course.get_assignment(existing_id)
                 except:
-                    print(f"    ! Cached Assignment ID {existing_id} not found. Re-rendering.")
+                    logger.warning("    Previously synced assignment not found in Canvas, re-syncing")
                     needs_render = True
 
         # 1b. Parse Metadata
@@ -62,7 +63,7 @@ class AssignmentHandler(BaseHandler):
         # 1c. Process Content (ALWAYS, to track ACTIVE_ASSET_IDS)
         with open(file_path, 'r', encoding='utf-8') as f:
             raw_content = f.read()
-            
+
         base_path = os.path.dirname(file_path)
         processed_content = process_content(raw_content, base_path, course, content_root=content_root)
 
@@ -87,7 +88,8 @@ class AssignmentHandler(BaseHandler):
             }
 
             if assign_obj:
-                print(f"    -> Updating assignment: {title} (ID: {assign_obj.id})")
+                logger.info("    [yellow]Updating assignment:[/yellow] %s", title)
+                logger.debug("    Matched by cached ID: %s", assign_obj.id)
                 assign_obj.edit(assignment=assignment_args)
             else:
                 # Double check Title Search
@@ -97,13 +99,14 @@ class AssignmentHandler(BaseHandler):
                     if a.name == title:
                         existing_item = a
                         break
-                
+
                 if existing_item:
-                    print(f"    -> Updating assignment (by title): {title} (ID: {existing_item.id})")
+                    logger.info("    [yellow]Updating assignment:[/yellow] %s", title)
+                    logger.debug("    Matched by title search (ID: %s)", existing_item.id)
                     existing_item.edit(assignment=assignment_args)
                     assign_obj = existing_item
                 else:
-                    print(f"    -> Creating assignment: {title}")
+                    logger.info("    [green]Creating assignment:[/green] %s", title)
                     assign_obj = course.create_assignment(assignment=assignment_args)
 
             # 4c. Update Sync Map
@@ -121,4 +124,3 @@ class AssignmentHandler(BaseHandler):
                 'title': assign_obj.name,
                 'published': published
             }, indent=indent)
-

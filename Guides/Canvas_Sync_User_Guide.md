@@ -39,7 +39,7 @@ This system automates the synchronization of local course content to a Canvas co
 2.  **Quarto CLI**: Must be installed and available in your system PATH.
 3.  **Python Packages**:
     ```bash
-    pip install canvasapi python-frontmatter PyYAML
+    pip install canvasapi python-frontmatter PyYAML asteval rich
     ```
 4.  **Environment Variables**:
     *   `CANVAS_API_URL` (e.g., `https://canvas.instructure.com`)
@@ -62,6 +62,15 @@ python sync_to_canvas.py ../MyCourseData
 
 # Sync including Calendar (Opt-in)
 python sync_to_canvas.py --sync-calendar
+
+# Verbose output (shows debug details with timestamps)
+python sync_to_canvas.py --verbose
+
+# Quiet mode (only show errors)
+python sync_to_canvas.py --quiet
+
+# Save full debug log to a file
+python sync_to_canvas.py --log-file sync.log
 ```
 
 ---

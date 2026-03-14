@@ -58,7 +58,7 @@ Allows you to manage your entire course as a local code repository (Git) while k
 
 2.  Install dependencies:
     ```bash
-    pip install canvasapi python-frontmatter PyYAML asteval
+    pip install canvasapi python-frontmatter PyYAML asteval rich
     ```
 
 ## ⚙️ Configuration
@@ -84,6 +84,15 @@ python sync_to_canvas.py ./MyCourseContent
 
 # Sync including Calendar events (Opt-in)
 python sync_to_canvas.py --sync-calendar
+
+# Verbose output (debug details with timestamps)
+python sync_to_canvas.py --verbose
+
+# Quiet mode (errors only)
+python sync_to_canvas.py --quiet
+
+# Save full debug log to a file
+python sync_to_canvas.py --log-file sync.log
 ```
 
 ### Portable Mode

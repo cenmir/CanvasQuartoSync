@@ -30,11 +30,11 @@ The system uses a hardcoded render command: `quarto render ... --to html`.
 
 ---
 
-### 2. Logging System
-Replace `print()` statements with the standard Python `logging` module. This would allow:
-- Saving logs to a file.
-- Enabling `--verbose` or `--debug` modes.
-- Cleaner output for automated CI/CD runners.
+### ~~2. Logging System~~ (Implemented)
+Replaced all `print()` statements with Python's `logging` module + `rich` for colored console output.
+
+_Implemented with `--verbose`, `--quiet`, and `--log-file` CLI flags. See `handlers/log.py` for configuration._
+
 ---
 
 ### ~~3. New Quizzes: Additional Question Types~~ (Partially Implemented)

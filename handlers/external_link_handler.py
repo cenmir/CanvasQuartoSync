@@ -2,12 +2,13 @@ import frontmatter
 import os
 from handlers.base_handler import BaseHandler
 from handlers.content_utils import parse_module_name
+from handlers.log import logger
 
 class ExternalLinkHandler(BaseHandler):
     def can_handle(self, file_path: str) -> bool:
         if not file_path.endswith('.qmd'):
             return False
-        
+
         try:
             post = frontmatter.load(file_path)
             canvas_meta = post.metadata.get('canvas', {})
@@ -28,13 +29,13 @@ class ExternalLinkHandler(BaseHandler):
         new_tab = canvas_meta.get('new_tab', False)
 
         if not url:
-            print(f"    ! Error: External link '{title}' is missing 'canvas.url' in frontmatter.")
+            logger.error("    External link '%s' is missing 'canvas.url' in frontmatter", title)
             return
 
-        print(f"Syncing External Link: {title} -> {url}")
+        logger.info("  [cyan]Syncing external link:[/cyan] [bold]%s[/bold] -> %s", title, url)
 
         if not module:
-            print(f"    ! Skipping: External links can only be added to a module.")
+            logger.warning("    Skipping: external links can only be added to a module")
             return
 
         return self.add_to_module(module, {

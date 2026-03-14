@@ -4,6 +4,7 @@ import frontmatter
 import json
 import shutil
 from canvasapi import Canvas
+from handlers.log import logger
 
 # Global cache for folder names to IDs to avoid redundant API lookups
 FOLDER_CACHE = {}
@@ -25,14 +26,6 @@ def clean_title(filename):
     Removes NN_ prefix and file extension.
     Example: '05_Syllabus.pdf' -> 'Syllabus.pdf' or '02_Intro.qmd' -> 'Intro'
     """
-    # 1. Strip extension for content types like .qmd
-    base = os.path.splitext(filename)[0]
-    # 2. But for solo assets like .pdf, maybe we want to keep extension?
-    # Actually, Canvas module items for files usually look better with names.
-    # The user said: "remove the 'NN_' in the filename".
-    # Let's keep the extension if it's a solo asset, but strip it for Pages/Assignments.
-    
-    # Actually, let's just implement the 'NN_' stripping logic specifically.
     return parse_module_name(filename)
 
 # System-managed namespaces for orphan cleanup
@@ -47,35 +40,34 @@ def get_or_create_folder(course, folder_path, parent_folder_id=None):
     Finds or creates a folder in the Canvas course files.
     """
     global FOLDER_CACHE
-    
+
     # 1. Check cache first (normalized)
     cache_key = folder_path.lower()
     if cache_key in FOLDER_CACHE:
         return FOLDER_CACHE[cache_key]
 
     # 2. Fetch all folders and populate cache if empty
-    # We do this once per run mostly
-    print(f"    Checking for folder: {folder_path}...")
+    logger.debug("    Checking for folder: %s", folder_path)
     folders = course.get_folders()
     for f in folders:
         FOLDER_CACHE[f.name.lower()] = f
-    
+
     # 3. Check cache again after populating
     if cache_key in FOLDER_CACHE:
         return FOLDER_CACHE[cache_key]
-    
+
     # 4. Not found, create
-    print(f"    + Creating folder: {folder_path}")
+    logger.info("    [green]Creating folder:[/green] %s", folder_path)
     try:
         if parent_folder_id:
             new_folder = course.create_folder(name=folder_path, parent_folder_id=parent_folder_id)
         else:
             new_folder = course.create_folder(name=folder_path)
-            
+
         FOLDER_CACHE[new_folder.name.lower()] = new_folder
         return new_folder
     except Exception as e:
-        print(f"    ! Error creating folder '{folder_path}': {e}")
+        logger.error("    Failed to create folder '%s': %s", folder_path, e)
         raise
 
 def upload_file(course, local_path, target_folder_name="course_files", content_root=None):
@@ -85,18 +77,18 @@ def upload_file(course, local_path, target_folder_name="course_files", content_r
     """
     global ACTIVE_ASSET_IDS
     if not os.path.exists(local_path):
-        print(f"    ! File not found: {local_path}")
+        logger.error("    File not found: %s", local_path)
         return local_path, None
-    
+
     filename = os.path.basename(local_path)
-    
+
     # Smart Upload Logic: Check Sync Map for mtime match
     mtime = os.path.getmtime(local_path)
     if content_root:
         sync_map = load_sync_map(content_root)
         rel_path = os.path.relpath(local_path, content_root).replace('\\', '/')
         cached_entry = sync_map.get(rel_path)
-        
+
         if isinstance(cached_entry, dict):
             # We strictly check url too in case it failed previously
             if cached_entry.get('mtime') == mtime and cached_entry.get('url'):
@@ -105,16 +97,16 @@ def upload_file(course, local_path, target_folder_name="course_files", content_r
                 if asset_id:
                     ACTIVE_ASSET_IDS.add(asset_id)
                 return cached_entry.get('url'), asset_id
-    
+
     folder = get_or_create_folder(course, target_folder_name)
-    
-    print(f"    -> Uploading file: {filename}")
+
+    logger.info("    [yellow]Uploading file:[/yellow] %s", filename)
     try:
         success, json_response = folder.upload(local_path, on_duplicate='overwrite')
         if success:
             file_url = json_response.get('url')
             file_id = json_response.get('id')
-            
+
             # Track as active
             if file_id:
                 ACTIVE_ASSET_IDS.add(file_id)
@@ -129,13 +121,13 @@ def upload_file(course, local_path, target_folder_name="course_files", content_r
                     'id': file_id
                 }
                 save_sync_map(content_root, sync_map)
-                
+
             return file_url, file_id
         else:
-            print("    ! Upload failed.")
+            logger.error("    Upload failed for %s", filename)
             return local_path, None
     except Exception as e:
-        print(f"    ! Error uploading file: {e}")
+        logger.error("    Failed to upload file %s: %s", filename, e)
         return local_path, None
 
 def resolve_cross_link(course, current_file_path, link_target, base_path):
@@ -150,7 +142,7 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
         abs_target_path = os.path.normpath(os.path.join(base_path, link_target))
 
     if not os.path.exists(abs_target_path):
-        print(f"    ! Link target not found: {link_target}")
+        logger.warning("    Link target not found: %s", link_target)
         return link_target
 
     filename = os.path.basename(abs_target_path)
@@ -178,38 +170,31 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
                 target_type = 'new_quiz'
             else:
                 target_type = 'quiz'
-            
+
         else:
-            # Unknown content type, treat as file upload?
-            # But we only call this for known extensions usually.
             return link_target
 
     except Exception as e:
-        print(f"    ! Error parsing target {filename}: {e}")
+        logger.error("    Failed to parse target %s: %s", filename, e)
         return link_target
 
     # 3. Find or Create Stub in Canvas
-    # We need to find the object by title.
-    
     canvas_url = link_target # Fallback
 
     if target_type == 'page':
-        # Finding pages is tricky because 'url' in API != 'title'. 
-        # But get_pages(search_term=title) works mostly.
         pages = course.get_pages(search_term=target_title)
         target_obj = None
         for p in pages:
             if p.title == target_title:
                 target_obj = p
                 break
-        
+
         if not target_obj:
-            print(f"    + [Stub] Creating Page: {target_title}")
+            logger.info("    [green]Creating stub page:[/green] %s", target_title)
             target_obj = course.create_page(wiki_page={'title': target_title, 'published': False, 'body': '<i>Placeholder for future sync.</i>'})
-        
-        # HTML URL is needed. 'html_url' property usually exists.
+
         canvas_url = target_obj.html_url
-        
+
     elif target_type == 'assignment':
         assignments = course.get_assignments(search_term=target_title)
         target_obj = None
@@ -217,11 +202,11 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
             if a.name == target_title:
                 target_obj = a
                 break
-        
+
         if not target_obj:
-            print(f"    + [Stub] Creating Assignment: {target_title}")
+            logger.info("    [green]Creating stub assignment:[/green] %s", target_title)
             target_obj = course.create_assignment(assignment={'name': target_title, 'published': False})
-            
+
         canvas_url = target_obj.html_url
 
     elif target_type == 'quiz':
@@ -231,42 +216,39 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
             if q.title == target_title:
                 target_obj = q
                 break
-        
+
         if not target_obj:
-             print(f"    + [Stub] Creating Quiz: {target_title}")
+             logger.info("    [green]Creating stub quiz:[/green] %s", target_title)
              target_obj = course.create_quiz(quiz={'title': target_title, 'published': False, 'quiz_type': 'assignment'})
-        
+
         canvas_url = target_obj.html_url
 
     elif target_type == 'new_quiz':
-        # New Quizzes are assignment-backed. Search assignments.
         assignments = course.get_assignments(search_term=target_title)
         target_obj = None
         for a in assignments:
             if a.name == target_title:
                 target_obj = a
                 break
-        
+
         if not target_obj:
-            print(f"    + [Stub] Creating New Quiz: {target_title}")
+            logger.info("    [green]Creating stub new quiz:[/green] %s", target_title)
             from handlers.new_quiz_api import NewQuizAPIClient
             api_url = os.environ.get("CANVAS_API_URL")
             api_token = os.environ.get("CANVAS_API_TOKEN")
             client = NewQuizAPIClient(api_url, api_token)
-            
-            # Create stub using New Quiz API
+
             quiz_payload = {
                 'title': target_title,
                 'published': False
             }
             try:
                 created_quiz = client.create_quiz(course.id, quiz_payload)
-                # Client returns dict. Need to fetch the assignment to get html_url
                 target_obj = course.get_assignment(created_quiz['id'])
             except Exception as e:
-                print(f"    ! Error creating New Quiz stub: {e}")
+                logger.error("    Failed to create new quiz stub: %s", e)
                 return canvas_url
-                
+
         canvas_url = target_obj.html_url
 
     return canvas_url
@@ -275,35 +257,32 @@ def process_content(content, base_path, course, content_root=None):
     """
     Main entry point. Scans for images AND file/content links.
     """
-    
+
     # --- 1. Process Images (![...](...)) ---
     def image_replacer(match):
         alt_text = match.group(1)
         rel_path = match.group(2)
-        
+
         if rel_path.startswith(('http://', 'https://', 'data:')):
             return match.group(0)
-            
+
         if os.path.isabs(rel_path):
             abs_path = rel_path
         else:
             abs_path = os.path.normpath(os.path.join(base_path, rel_path))
-            
+
         # Upload to namespaced folder
         new_url, file_id = upload_file(course, abs_path, FOLDER_IMAGES, content_root=content_root)
-        
+
         if file_id and new_url:
-            # new_url is usually like .../files/ID/download?download_frd=1&verifier=...
-            # Quarto will often append .png to the very end of this if it's the src of an image.
-            # We fix this by inserting the extension before the query string.
             ext = os.path.splitext(abs_path)[1].lower()
             if '?' in new_url:
                 base_part, query_part = new_url.split('?', 1)
                 if not base_part.endswith(ext):
                     new_url = f"{base_part}{ext}?{query_part}"
-            
+
             return f"![{alt_text}]({new_url})"
-        
+
         return f"![{alt_text}]({rel_path})"
 
     # Regex for images
@@ -313,7 +292,7 @@ def process_content(content, base_path, course, content_root=None):
     def link_replacer(match):
         link_text = match.group(1)
         rel_path = match.group(2)
-        
+
         if rel_path.startswith(('http://', 'https://', 'data:', '#', 'mailto:')):
             return match.group(0)
 
@@ -321,11 +300,11 @@ def process_content(content, base_path, course, content_root=None):
             abs_path = rel_path
         else:
             abs_path = os.path.normpath(os.path.join(base_path, rel_path))
-            
+
         ext = os.path.splitext(rel_path)[1].lower()
 
-        content_extensions = ['.qmd', '.json'] 
-        
+        content_extensions = ['.qmd', '.json']
+
         if ext in content_extensions:
             new_url = resolve_cross_link(course, os.path.join(base_path, "current_context"), rel_path, base_path)
             return f"[{link_text}]({new_url})"
@@ -333,17 +312,14 @@ def process_content(content, base_path, course, content_root=None):
             # Asset Upload (PDF, ZIP, DOCX, PY, IPYNB, etc)
             new_url, file_id = upload_file(course, abs_path, FOLDER_FILES, content_root=content_root)
             if file_id:
-                # Link to Canvas file preview page (has built-in Download button)
-                # This avoids CDN redirect issues where text-based files are
-                # displayed inline instead of downloaded.
                 api_url = course._requester.original_url
                 preview_url = f"{api_url}/courses/{course.id}/files/{file_id}"
                 return f"[{link_text}]({preview_url})"
             return f"[{link_text}]({new_url})"
-            
+
     pattern_links = r'(?<!\!)\[(.*?)\]\((.*?)\)'
     content = re.sub(pattern_links, link_replacer, content)
-    
+
     return content
 
 import time
@@ -359,16 +335,16 @@ def safe_delete_file(path, retries=5, delay=0.5):
     for i in range(retries):
         try:
             os.remove(path)
-            # print(f"    - Deleted file: {os.path.basename(path)}")
+            logger.debug("    Deleted file: %s", os.path.basename(path))
             return
         except PermissionError:
             if i < retries - 1:
-                # print(f"    ! File locked, retrying {i+1}/{retries}...")
+                logger.debug("    File locked, retrying %d/%d...", i + 1, retries)
                 time.sleep(delay)
             else:
-                print(f"    ! Final Error: Could not delete {path} after {retries} attempts.")
+                logger.error("    Could not delete %s after %d attempts", path, retries)
         except Exception as e:
-            print(f"    ! Error deleting file {path}: {e}")
+            logger.error("    Failed to delete file %s: %s", path, e)
             break
 
 def safe_delete_dir(path, retries=5, delay=0.5):
@@ -381,16 +357,16 @@ def safe_delete_dir(path, retries=5, delay=0.5):
     for i in range(retries):
         try:
             shutil.rmtree(path)
-            # print(f"    - Deleted directory: {os.path.basename(path)}")
+            logger.debug("    Deleted directory: %s", os.path.basename(path))
             return
         except PermissionError:
             if i < retries - 1:
-                # print(f"    ! Directory locked, retrying {i+1}/{retries}...")
+                logger.debug("    Directory locked, retrying %d/%d...", i + 1, retries)
                 time.sleep(delay)
             else:
-                print(f"    ! Final Error: Could not delete directory {path} after {retries} attempts.")
+                logger.error("    Could not delete directory %s after %d attempts", path, retries)
         except Exception as e:
-            print(f"    ! Error deleting directory {path}: {e}")
+            logger.error("    Failed to delete directory %s: %s", path, e)
             break
 
 # --- Sync Mapping Utilities ---
@@ -405,7 +381,7 @@ def load_sync_map(content_root):
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            print(f"    ! Error loading sync map: {e}")
+            logger.error("    Failed to load sync map: %s", e)
     return {}
 
 def save_sync_map(content_root, sync_map):
@@ -414,7 +390,7 @@ def save_sync_map(content_root, sync_map):
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(sync_map, f, indent=4)
     except Exception as e:
-        print(f"    ! Error saving sync map: {e}")
+        logger.error("    Failed to save sync map: %s", e)
 
 def get_mapped_id(content_root, file_path):
     """
@@ -424,7 +400,7 @@ def get_mapped_id(content_root, file_path):
     rel_path = os.path.relpath(file_path, content_root).replace('\\', '/')
     sync_map = load_sync_map(content_root)
     entry = sync_map.get(rel_path)
-    
+
     if isinstance(entry, dict):
         return entry.get('id'), entry
     return entry, None
@@ -435,7 +411,7 @@ def save_mapped_id(content_root, file_path, canvas_id, mtime=None):
     """
     rel_path = os.path.relpath(file_path, content_root).replace('\\', '/')
     sync_map = load_sync_map(content_root)
-    
+
     if mtime is not None:
         sync_map[rel_path] = {
             'id': canvas_id,
@@ -444,7 +420,7 @@ def save_mapped_id(content_root, file_path, canvas_id, mtime=None):
     else:
         # Backward compatibility / simple ID
         sync_map[rel_path] = canvas_id
-    
+
     save_sync_map(content_root, sync_map)
 
 def prune_orphaned_assets(course):
@@ -452,27 +428,25 @@ def prune_orphaned_assets(course):
     Deletes files from namespaced folders that are no longer in ACTIVE_ASSET_IDS.
     """
     global ACTIVE_ASSET_IDS
-    print(f">> Starting Asset Orphan Cleanup...")
-    print(f"   Active assets tracked: {len(ACTIVE_ASSET_IDS)}")
-    
+    logger.info("[bold cyan]Cleaning up unused files...[/bold cyan]")
+    logger.debug("  Tracking %d active assets", len(ACTIVE_ASSET_IDS))
+
     deleted_count = 0
     managed_folders = [FOLDER_IMAGES, FOLDER_FILES]
-    
+
     for folder_name in managed_folders:
         try:
-            # We don't want to create them if they don't exist during pruning?
-            # Actually get_or_create_folder is safe and caches.
             folder = get_or_create_folder(course, folder_name)
             files = folder.get_files()
             for f in files:
                 if f.id not in ACTIVE_ASSET_IDS:
-                    print(f"   - Deleting orphaned asset: {f.filename} (ID: {f.id}) from {folder_name}")
+                    logger.info("  [red]Deleting unused file:[/red] %s (ID: %s) from %s", f.filename, f.id, folder_name)
                     f.delete()
                     deleted_count += 1
         except Exception as e:
-            print(f"   ! Error pruning folder {folder_name}: {e}")
-            
+            logger.error("  Failed to clean up folder %s: %s", folder_name, e)
+
     if deleted_count > 0:
-        print(f"   Cleanup complete. Removed {deleted_count} orphaned files.")
+        logger.info("  [green]Cleanup complete.[/green] Removed %d unused files.", deleted_count)
     else:
-        print(f"   Cleanup complete. No orphans found.")
+        logger.info("  [green]Cleanup complete.[/green] No unused files found.")

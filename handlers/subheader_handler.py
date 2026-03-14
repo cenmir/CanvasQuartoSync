@@ -2,12 +2,13 @@ import frontmatter
 import os
 from handlers.base_handler import BaseHandler
 from handlers.content_utils import parse_module_name
+from handlers.log import logger
 
 class SubHeaderHandler(BaseHandler):
     def can_handle(self, file_path: str) -> bool:
         if not (file_path.endswith('.md') or file_path.endswith('.qmd')):
             return False
-        
+
         try:
             post = frontmatter.load(file_path)
             canvas_meta = post.metadata.get('canvas', {})
@@ -22,10 +23,10 @@ class SubHeaderHandler(BaseHandler):
         if not title:
             title = parse_module_name(os.path.splitext(filename)[0])
         canvas_meta = post.metadata.get('canvas', {})
-        published = canvas_meta.get('published', True) 
+        published = canvas_meta.get('published', True)
         indent = canvas_meta.get('indent', 0)
-        
-        print(f"Syncing SubHeader: {title}")
+
+        logger.info("  [cyan]Syncing subheader:[/cyan] [bold]%s[/bold]", title)
 
         if not module:
             return

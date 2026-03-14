@@ -9,7 +9,7 @@ This document captures Canvas API quirks, design decisions, and pitfalls discove
 ### Quiz Snapshot Regeneration (Cannot Be Fixed)
 The Canvas REST API **cannot** force-regenerate a quiz snapshot (`quiz_data`) for an already-published quiz. The internal `generate_quiz_data` call only triggers during a `workflow_state` transition to `"available"`. For quizzes with student submissions, Canvas blocks unpublishing entirely, so the "Unpublish → Modify → Republish" workflow fails. The Canvas UI has a dedicated controller for this, but it requires SSO session authentication — Bearer tokens are not accepted.
 
-**Current workaround**: Update questions in-place and print a direct URL so the user can click **"Save It Now"** manually in the Canvas UI.
+**Current workaround**: Update questions in-place and log a direct URL so the user can click **"Save It Now"** manually in the Canvas UI.
 
 ### Front Page Cannot Be Unpublished
 If a page is set as the Canvas course **front page** ("startsida"), the API will reject any update that includes `published: false` with a `BadRequest` error ("Framsidan kan inte avpubliceras"). The sync tool catches this specific error and retries the edit **without** the `published` field, so the page title and body still sync correctly. The `published` state of the front page is left unchanged. This is handled in `PageHandler.sync()`.

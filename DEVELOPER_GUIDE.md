@@ -29,7 +29,8 @@ CanvasQuartoSync/
 │   ├── calendar_handler.py    # schedule.yaml → Canvas calendar events
 │   ├── subheader_handler.py   # .md/.qmd → Module SubHeader (visual separator)
 │   ├── external_link_handler.py # .qmd → Module External URL link
-│   └── content_utils.py       # Shared: image upload, cross-linking, sync map, pruning
+│   ├── content_utils.py       # Shared: image upload, cross-linking, sync map, pruning
+│   └── log.py                 # Logging configuration (logger + setup_logging)
 ├── Guides/
 │   ├── Canvas_Sync_User_Guide.md   # Full user-facing documentation
 │   └── Canvas_token_setup.md       # How to get a Canvas API token
@@ -52,7 +53,8 @@ CanvasQuartoSync/
 ```
 sync_to_canvas.py
   │
-  ├── Parse CLI args (content_root, --course-id, --sync-calendar)
+  ├── Parse CLI args (content_root, --course-id, --sync-calendar, --verbose, --quiet, --log-file)
+  ├── Initialize logging (handlers/log.py → setup_logging())
   ├── Load Canvas API via canvasapi library
   ├── Walk content_root for NN_* folders (→ Modules) and NN_* files
   │
@@ -119,7 +121,7 @@ Each handler checks the file's `mtime` against the value stored in `.canvas_sync
 
 ## Dependencies
 
-The project uses a **virtual environment** at `.venv/`. Always activate it before running:
+The project uses a **virtual environment** at `.venv/` that uses "uv". Always activate it before running:
 
 ```powershell
 .venv\Scripts\activate      # Windows
@@ -132,6 +134,7 @@ requests           # Raw HTTP client for New Quizzes API
 python-frontmatter # YAML frontmatter parser
 PyYAML             # YAML parsing (calendar, quiz metadata)
 asteval            # Safe math evaluation for Formula questions
+rich               # Colored console output and pretty tracebacks
 quarto             # External CLI — must be in PATH
 ```
 
@@ -157,7 +160,9 @@ quarto             # External CLI — must be in PATH
 ### Debugging sync issues
 - Check `.canvas_sync_map.json` in the content root for ID mappings.
 - Delete the map entry for a file to force re-render on next sync.
-- The tool uses `print()` for all output (no logging framework yet).
+- Use `--verbose` (`-v`) to see DEBUG-level output with timestamps and log levels.
+- Use `--log-file sync.log` to capture full debug output to a file.
+- All output uses Python's `logging` module via the shared `logger` from `handlers/log.py`.
 
 ---
 
