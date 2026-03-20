@@ -256,7 +256,20 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
 def process_content(content, base_path, course, content_root=None):
     """
     Main entry point. Scans for images AND file/content links.
+    Fenced code blocks are protected from processing.
     """
+
+    # --- 0. Protect fenced code blocks from link/image processing ---
+    code_blocks = {}
+    block_counter = [0]
+
+    def protect_code_block(match):
+        placeholder = f"\x00CODE_BLOCK_{block_counter[0]}\x00"
+        code_blocks[placeholder] = match.group(0)
+        block_counter[0] += 1
+        return placeholder
+
+    content = re.sub(r'```[\s\S]*?```', protect_code_block, content)
 
     # --- 1. Process Images (![...](...)) ---
     def image_replacer(match):
@@ -319,6 +332,10 @@ def process_content(content, base_path, course, content_root=None):
 
     pattern_links = r'(?<!\!)\[(.*?)\]\((.*?)\)'
     content = re.sub(pattern_links, link_replacer, content)
+
+    # --- 3. Restore protected code blocks ---
+    for placeholder, original in code_blocks.items():
+        content = content.replace(placeholder, original)
 
     return content
 
