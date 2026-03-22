@@ -435,6 +435,8 @@ def _latex_escape(text: str) -> str:
 
 def _markdown_to_latex_inline(text: str) -> str:
     """Convert inline markdown formatting to LaTeX."""
+    # Convert <br> / <br/> / <br /> to LaTeX newline before escaping
+    text = re.sub(r'<br\s*/?>', r'\\newline ', text)
     text = _latex_escape(text)
     # Bold: **text** → \textbf{text}
     text = re.sub(r'\*\*([^*]+)\*\*', r'\\textbf{\1}', text)
