@@ -15,9 +15,16 @@ class StudyGuideHandler(BaseHandler):
     def can_handle(self, file_path: str) -> bool:
         if not file_path.endswith('.qmd'):
             return False
-        if os.path.basename(file_path).startswith('_temp_'):
+        basename = os.path.basename(file_path)
+        if basename.startswith(('_temp_', 'tmp-')):
             return False
 
+        # Match by filename (case-insensitive): *StudyGuide* or *KursPM*
+        name_lower = basename.lower()
+        if 'studyguide' in name_lower or 'kurspm' in name_lower:
+            return True
+
+        # Match by frontmatter
         try:
             post = frontmatter.load(file_path)
             canvas_meta = post.metadata.get('canvas', {})
@@ -64,8 +71,13 @@ class StudyGuideHandler(BaseHandler):
         pdf_title = pdf_config.get('title', pdf_filename)
         pdf_published = pdf_config.get('published', False)
 
+        # Default target module for study guides detected by filename
         if not pdf_target_module_name:
-            logger.error("    [red]Missing required 'canvas.pdf.target_module' in frontmatter. Skipping PDF upload.[/red]")
+            if module:
+                pdf_target_module_name = module.name
+                logger.debug("    No 'canvas.pdf.target_module' set, defaulting to current module: %s", module.name)
+            else:
+                logger.warning("    [yellow]No 'canvas.pdf.target_module' set and no module context. PDF will be uploaded but not added to a module.[/yellow]")
 
         # 3. Process Content (ALWAYS, to track ACTIVE_ASSET_IDS for pruning)
         with open(file_path, 'r', encoding='utf-8') as f:
@@ -93,10 +105,9 @@ class StudyGuideHandler(BaseHandler):
             pdf_file_id = None
             pdf_file_url = None
 
-            if pdf_target_module_name:
-                pdf_path = self.render_quarto_pdf(processed_content, base_path, filename)
-                if pdf_path is None:
-                    logger.warning("    [yellow]PDF render failed — syncing HTML page only.[/yellow]")
+            pdf_path = self.render_quarto_pdf(processed_content, base_path, filename)
+            if pdf_path is None:
+                logger.warning("    [yellow]PDF render failed — syncing HTML page only.[/yellow]")
 
             # 6. Create/Update Canvas Page
             page_args = {

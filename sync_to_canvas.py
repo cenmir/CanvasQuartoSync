@@ -30,6 +30,7 @@ def main():
     parser.add_argument("content_path", nargs="?", default=".", help="Path to the content directory (default: current dir).")
     parser.add_argument("--sync-calendar", action="store_true", help="Enable calendar synchronization (Opt-in).")
     parser.add_argument("--course-id", help="Canvas Course ID (Override).")
+    parser.add_argument("--force", "-f", action="store_true", help="Force re-render all files (ignore cached mtimes).")
 
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", "-v", action="store_true", help="Show detailed debug output.")
@@ -48,6 +49,13 @@ def main():
         return
 
     logger.info("Target content directory: [dim]%s[/dim]", content_root)
+
+    # Force re-render: delete sync map to clear cached mtimes
+    if args.force:
+        sync_map_path = os.path.join(content_root, '.canvas_sync_map.json')
+        if os.path.exists(sync_map_path):
+            os.remove(sync_map_path)
+            logger.info("[yellow]Force mode:[/yellow] cleared sync map, all files will re-render")
 
     # Resolve Context
     API_URL, API_TOKEN = get_api_credentials(content_root)

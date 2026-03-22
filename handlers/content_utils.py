@@ -301,6 +301,33 @@ def process_content(content, base_path, course, content_root=None):
     # Regex for images
     content = re.sub(r'!\[(.*?)\]\((.*?)\)', image_replacer, content)
 
+    # --- 1b. Process HTML <img src="..."> tags ---
+    def img_tag_replacer(match):
+        full_tag = match.group(0)
+        src = match.group(1)
+
+        if src.startswith(('http://', 'https://', 'data:')):
+            return full_tag
+
+        if os.path.isabs(src):
+            abs_path = src
+        else:
+            abs_path = os.path.normpath(os.path.join(base_path, src))
+
+        new_url, file_id = upload_file(course, abs_path, FOLDER_IMAGES, content_root=content_root)
+
+        if file_id and new_url:
+            ext = os.path.splitext(abs_path)[1].lower()
+            if '?' in new_url:
+                base_part, query_part = new_url.split('?', 1)
+                if not base_part.endswith(ext):
+                    new_url = f"{base_part}{ext}?{query_part}"
+            return full_tag.replace(src, new_url)
+
+        return full_tag
+
+    content = re.sub(r'<img\s[^>]*?src=["\']([^"\']+)["\']', img_tag_replacer, content)
+
     # --- 2. Process File/Content Links ([...](...)) ---
     def link_replacer(match):
         link_text = match.group(1)

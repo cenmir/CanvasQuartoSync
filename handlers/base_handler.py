@@ -127,8 +127,8 @@ class BaseHandler(ABC):
         Returns the path to the rendered PDF file, or None on failure.
         The caller is responsible for deleting the PDF after use.
         """
-        temp_qmd = os.path.join(base_path, f"_temp_pdf_{filename}")
-        temp_stem = os.path.splitext(f"_temp_pdf_{filename}")[0]
+        temp_qmd = os.path.join(base_path, f"tmp-pdf-{filename}")
+        temp_stem = os.path.splitext(f"tmp-pdf-{filename}")[0]
         temp_files_dir = os.path.join(base_path, f"{temp_stem}_files")
         temp_pdf = os.path.join(base_path, f"{temp_stem}.pdf")
 
@@ -150,7 +150,7 @@ class BaseHandler(ABC):
 
         except subprocess.CalledProcessError as e:
             stderr_text = e.stderr.decode('utf-8', errors='replace') if e.stderr else ''
-            if 'tinytex' in stderr_text.lower() or 'latex' in stderr_text.lower() or 'pdflatex' in stderr_text.lower():
+            if 'no such file' in stderr_text.lower() and ('latex' in stderr_text.lower() or 'tinytex' in stderr_text.lower()):
                 logger.error("    PDF render failed: LaTeX not found. Install with: quarto install tinytex")
             else:
                 logger.error("    PDF render failed: %s", stderr_text or e)
@@ -166,8 +166,8 @@ class BaseHandler(ABC):
         Renders a processed QMD document to HTML via Quarto.
         Extracts the <main> content block and cleans up temp files.
         """
-        temp_qmd = os.path.join(base_path, f"_temp_{filename}")
-        temp_stem = os.path.splitext(f"_temp_{filename}")[0]
+        temp_qmd = os.path.join(base_path, f"tmp-html-{filename}")
+        temp_stem = os.path.splitext(f"tmp-html-{filename}")[0]
         temp_files_dir = os.path.join(base_path, f"{temp_stem}_files")
         temp_html = None
 
