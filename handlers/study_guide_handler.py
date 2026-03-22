@@ -88,7 +88,8 @@ class StudyGuideHandler(BaseHandler):
             from handlers.qmd_preprocessor import preprocess_study_guide
             from handlers.config import load_config
             config = load_config(content_root) if content_root else {}
-            raw_content = preprocess_study_guide(raw_content, config)
+            config_dir = content_root or os.path.dirname(file_path)
+            raw_content = preprocess_study_guide(raw_content, config, config_dir=config_dir)
             logger.debug("    Preprocessed study guide with dual-format styling")
 
         base_path = os.path.dirname(file_path)

@@ -20,29 +20,85 @@ import sys
 # Constants
 # ---------------------------------------------------------------------------
 
-JU_CSS_BLOCK = """\
-```{=html}
-<link rel="stylesheet" href="https://instructure-uploads-eu.s3.eu-west-1.amazonaws.com/account_144680000000000001/attachments/388876/app.ju.min.css">
-<style>
-  /* JU Brand Colors — from official graphic manual (2023):
-     https://ju.se/download/18.3bf3a08918eeceec0f24e843/1714479504941/Grafisk%20manual%202023_EN_web.pdf */
-  h1, h2 { color: #003865 !important; }
-  h3 { color: #961B81 !important; }
-  a { color: #961B81 !important; }
-  a:hover { color: #003865 !important; }
-  details summary { color: #003865 !important; }
-  details { border-color: #961B81 !important; }
-  table th, table thead tr { background-color: #003865 !important; color: #fff !important; }
-  table tr:nth-child(even) { background-color: #f0f4f7; }
-</style>
-```"""
-
 GRADE_COLORS = {
     'Fail': '#c00',
     '3': '#f90',
     '4': '#09f',
     '5': '#090',
 }
+
+# Default branding (used when no branding.css is provided)
+DEFAULT_BRAND = {
+    '--brand-primary': '#333333',
+    '--brand-heading': '#222222',
+    '--brand-accent': '#666666',
+    '--brand-warn': '#cc9900',
+    '--brand-grey': '#999999',
+}
+
+
+# ---------------------------------------------------------------------------
+# Branding
+# ---------------------------------------------------------------------------
+
+def _load_branding(config: dict, config_dir: str = '.') -> dict:
+    """Load branding from CSS file specified in config, or use defaults.
+
+    Returns dict with:
+        'css_block': str — the raw HTML block to inject (link + style tags)
+        'colors': dict — parsed CSS custom properties (--brand-* → hex)
+    """
+    branding_config = config.get('branding', {})
+    css_path = branding_config.get('css', '')
+    canvas_css_url = branding_config.get('canvas_css_url', '')
+
+    colors = dict(DEFAULT_BRAND)
+    css_content = ''
+
+    if css_path:
+        if not os.path.isabs(css_path):
+            css_path = os.path.join(config_dir, css_path)
+        if os.path.exists(css_path):
+            with open(css_path, 'r', encoding='utf-8') as f:
+                css_content = f.read()
+            # Parse --brand-* variables from :root block
+            for match in re.finditer(r'(--brand-[\w-]+)\s*:\s*([^;]+);', css_content):
+                colors[match.group(1)] = match.group(2).strip()
+
+    # Build the HTML block
+    parts = ['```{=html}']
+    if canvas_css_url:
+        parts.append(f'<link rel="stylesheet" href="{canvas_css_url}">')
+    if css_content:
+        parts.append(f'<style>\n{css_content}\n</style>')
+    parts.append('```')
+
+    return {
+        'css_block': '\n'.join(parts),
+        'colors': colors,
+    }
+
+
+def _colors_to_latex(colors: dict) -> str:
+    """Convert CSS hex colors to LaTeX \\definecolor commands."""
+    lines = []
+    name_map = {
+        '--brand-primary': 'brand-primary',
+        '--brand-heading': 'brand-heading',
+        '--brand-accent': 'brand-accent',
+        '--brand-warn': 'brand-warn',
+        '--brand-grey': 'brand-grey',
+    }
+    for css_var, latex_name in name_map.items():
+        hex_color = colors.get(css_var, '#000000').lstrip('#')
+        if len(hex_color) == 3:
+            hex_color = ''.join(c * 2 for c in hex_color)
+        try:
+            r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+            lines.append(f'\\definecolor{{{latex_name}}}{{RGB}}{{{r},{g},{b}}}')
+        except (ValueError, IndexError):
+            pass
+    return '\n'.join(lines)
 
 LABELS = {
     'english': {
@@ -74,12 +130,13 @@ SPECIAL_SECTIONS = {
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def preprocess_study_guide(qmd_content: str, config: dict) -> str:
+def preprocess_study_guide(qmd_content: str, config: dict, config_dir: str = '.') -> str:
     """Transform a minimal QMD into a styled dual-format QMD.
 
     Args:
         qmd_content: Raw QMD file content (frontmatter + markdown body).
         config: Dictionary from config.toml with course metadata.
+        config_dir: Directory containing config.toml (for resolving branding.css path).
 
     Returns:
         Processed QMD string ready for Quarto rendering.
@@ -95,6 +152,9 @@ def preprocess_study_guide(qmd_content: str, config: dict) -> str:
     lang = config.get('language', 'english')
     labels = LABELS.get(lang, LABELS['english'])
 
+    # Load branding
+    branding = _load_branding(config, config_dir)
+
     sections = _parse_sections(body)
 
     parts = []
@@ -102,12 +162,12 @@ def preprocess_study_guide(qmd_content: str, config: dict) -> str:
     # 1. Frontmatter (unchanged)
     parts.append(f"---\n{frontmatter}\n---\n")
 
-    # 2. CSS injection
-    parts.append(JU_CSS_BLOCK)
+    # 2. CSS injection from branding
+    parts.append(branding['css_block'])
     parts.append("")
 
     # 3. PDF front page
-    parts.append(_generate_front_page(config, labels))
+    parts.append(_generate_front_page(config, labels, branding['colors']))
     parts.append("")
 
     # 4. HTML syllabus link
@@ -234,7 +294,7 @@ def _find_first_image(content: str):
 # Front page generation
 # ---------------------------------------------------------------------------
 
-def _generate_front_page(config: dict, labels: dict) -> str:
+def _generate_front_page(config: dict, labels: dict, colors: dict = None) -> str:
     """Generate the PDF-only front page from config values."""
     course_name = config.get('course_name', 'Course')
     course_code = config.get('course_code', '')
@@ -262,7 +322,7 @@ def _generate_front_page(config: dict, labels: dict) -> str:
 
 ```{{=latex}}
 \\vspace{{0.5cm}}
-{{\\Huge\\bfseries\\color{{ju-purple}} {labels['course_pm']}}}
+{{\\Huge\\bfseries\\color{{brand-primary}} {labels['course_pm']}}}
 
 \\vspace{{0.5cm}}
 
@@ -278,7 +338,7 @@ def _generate_front_page(config: dict, labels: dict) -> str:
 
 \\vfill
 
-{{\\footnotesize \\textcolor{{ju-purple}}{{\\textbf{{BLANK}}}}-JTH-10-002-\\textcolor{{ju-purple}}{{\\textbf{{C}}}}-E verB \\hfill \\LaTeX}}
+{{\\footnotesize \\textcolor{{brand-primary}}{{\\textbf{{BLANK}}}}-JTH-10-002-\\textcolor{{brand-primary}}{{\\textbf{{C}}}}-E verB \\hfill \\LaTeX}}
 
 \\newpage
 ```
@@ -680,7 +740,7 @@ if __name__ == '__main__':
         qmd_content = f.read()
 
     # Process
-    result = preprocess_study_guide(qmd_content, config)
+    result = preprocess_study_guide(qmd_content, config, config_dir=os.path.dirname(config_path) or '.')
 
     # Output
     if args.output:
