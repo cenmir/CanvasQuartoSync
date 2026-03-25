@@ -108,7 +108,7 @@ class StudyGuideHandler(BaseHandler):
             pdf_file_id = None
             pdf_file_url = None
 
-            pdf_path = self.render_quarto_pdf(processed_content, base_path, filename)
+            pdf_path = self.render_quarto_pdf(raw_content, base_path, filename)
             if pdf_path is None:
                 logger.warning("    [yellow]PDF render failed — syncing HTML page only.[/yellow]")
 
