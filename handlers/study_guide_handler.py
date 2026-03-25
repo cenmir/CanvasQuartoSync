@@ -8,6 +8,7 @@ from handlers.content_utils import (
     load_sync_map, save_sync_map, parse_module_name, safe_delete_file,
     FOLDER_FILES, ACTIVE_ASSET_IDS
 )
+from handlers.drift_detector import check_drift, store_canvas_hash
 from handlers.log import logger
 
 
@@ -15,9 +16,16 @@ class StudyGuideHandler(BaseHandler):
     def can_handle(self, file_path: str) -> bool:
         if not file_path.endswith('.qmd'):
             return False
-        if os.path.basename(file_path).startswith('_temp_'):
+        basename = os.path.basename(file_path)
+        if basename.startswith(('_temp_', 'tmp-')):
             return False
 
+        # Match by filename (case-insensitive): *StudyGuide* or *KursPM*
+        name_lower = basename.lower()
+        if 'studyguide' in name_lower or 'kurspm' in name_lower:
+            return True
+
+        # Match by frontmatter
         try:
             post = frontmatter.load(file_path)
             canvas_meta = post.metadata.get('canvas', {})
@@ -64,12 +72,26 @@ class StudyGuideHandler(BaseHandler):
         pdf_title = pdf_config.get('title', pdf_filename)
         pdf_published = pdf_config.get('published', False)
 
+        # Default target module for study guides detected by filename
         if not pdf_target_module_name:
-            logger.error("    [red]Missing required 'canvas.pdf.target_module' in frontmatter. Skipping PDF upload.[/red]")
+            if module:
+                pdf_target_module_name = module.name
+                logger.debug("    No 'canvas.pdf.target_module' set, defaulting to current module: %s", module.name)
+            else:
+                logger.warning("    [yellow]No 'canvas.pdf.target_module' set and no module context. PDF will be uploaded but not added to a module.[/yellow]")
 
         # 3. Process Content (ALWAYS, to track ACTIVE_ASSET_IDS for pruning)
         with open(file_path, 'r', encoding='utf-8') as f:
             raw_content = f.read()
+
+        # 3a. Preprocess study guide (expand minimal QMD into dual-format styled QMD)
+        if canvas_meta.get('preprocess'):
+            from handlers.qmd_preprocessor import preprocess_study_guide
+            from handlers.config import load_config
+            config = load_config(content_root) if content_root else {}
+            config_dir = content_root or os.path.dirname(file_path)
+            raw_content = preprocess_study_guide(raw_content, config, config_dir=config_dir)
+            logger.debug("    Preprocessed study guide with dual-format styling")
 
         base_path = os.path.dirname(file_path)
         processed_content = process_content(raw_content, base_path, course, content_root=content_root)
@@ -85,10 +107,9 @@ class StudyGuideHandler(BaseHandler):
             pdf_file_id = None
             pdf_file_url = None
 
-            if pdf_target_module_name:
-                pdf_path = self.render_quarto_pdf(processed_content, base_path, filename)
-                if pdf_path is None:
-                    logger.warning("    [yellow]PDF render failed — syncing HTML page only.[/yellow]")
+            pdf_path = self.render_quarto_pdf(processed_content, base_path, filename)
+            if pdf_path is None:
+                logger.warning("    [yellow]PDF render failed — syncing HTML page only.[/yellow]")
 
             # 6. Create/Update Canvas Page
             page_args = {
@@ -100,6 +121,13 @@ class StudyGuideHandler(BaseHandler):
             }
 
             if page_obj:
+                # Drift detection
+                if content_root:
+                    canvas_body = getattr(page_obj, 'body', '') or ''
+                    drift = check_drift(content_root, file_path, canvas_body)
+                    if drift['drifted']:
+                        logger.warning("    [yellow]DRIFT DETECTED:[/yellow] '%s' was modified on Canvas since last sync. Overwriting with local version.", title)
+
                 logger.info("    [yellow]Updating page:[/yellow] %s", title)
                 logger.debug("    Matched by cached ID: %s", page_obj.page_id)
                 try:
@@ -150,9 +178,10 @@ class StudyGuideHandler(BaseHandler):
                     if os.path.exists(pdf_path):
                         safe_delete_file(pdf_path)
 
-            # 8. Update Sync Map
+            # 8. Update Sync Map and store content hash for drift detection
             if content_root:
                 save_mapped_id(content_root, file_path, page_obj.page_id, mtime=current_mtime)
+                store_canvas_hash(content_root, file_path, html_body)
                 if pdf_file_id:
                     sync_map = load_sync_map(content_root)
                     rel_path = os.path.relpath(file_path, content_root).replace('\\', '/')

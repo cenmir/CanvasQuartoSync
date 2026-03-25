@@ -234,8 +234,8 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
         if not target_obj:
             logger.info("    [green]Creating stub new quiz:[/green] %s", target_title)
             from handlers.new_quiz_api import NewQuizAPIClient
-            api_url = os.environ.get("CANVAS_API_URL")
-            api_token = os.environ.get("CANVAS_API_TOKEN")
+            api_url = course._requester.original_url
+            api_token = course._requester._access_token
             client = NewQuizAPIClient(api_url, api_token)
 
             quiz_payload = {
@@ -256,7 +256,20 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
 def process_content(content, base_path, course, content_root=None):
     """
     Main entry point. Scans for images AND file/content links.
+    Fenced code blocks are protected from processing.
     """
+
+    # --- 0. Protect fenced code blocks from link/image processing ---
+    code_blocks = {}
+    block_counter = [0]
+
+    def protect_code_block(match):
+        placeholder = f"\x00CODE_BLOCK_{block_counter[0]}\x00"
+        code_blocks[placeholder] = match.group(0)
+        block_counter[0] += 1
+        return placeholder
+
+    content = re.sub(r'```[\s\S]*?```', protect_code_block, content)
 
     # --- 1. Process Images (![...](...)) ---
     def image_replacer(match):
@@ -287,6 +300,33 @@ def process_content(content, base_path, course, content_root=None):
 
     # Regex for images
     content = re.sub(r'!\[(.*?)\]\((.*?)\)', image_replacer, content)
+
+    # --- 1b. Process HTML <img src="..."> tags ---
+    def img_tag_replacer(match):
+        full_tag = match.group(0)
+        src = match.group(1)
+
+        if src.startswith(('http://', 'https://', 'data:')):
+            return full_tag
+
+        if os.path.isabs(src):
+            abs_path = src
+        else:
+            abs_path = os.path.normpath(os.path.join(base_path, src))
+
+        new_url, file_id = upload_file(course, abs_path, FOLDER_IMAGES, content_root=content_root)
+
+        if file_id and new_url:
+            ext = os.path.splitext(abs_path)[1].lower()
+            if '?' in new_url:
+                base_part, query_part = new_url.split('?', 1)
+                if not base_part.endswith(ext):
+                    new_url = f"{base_part}{ext}?{query_part}"
+            return full_tag.replace(src, new_url)
+
+        return full_tag
+
+    content = re.sub(r'<img\s[^>]*?src=["\']([^"\']+)["\']', img_tag_replacer, content)
 
     # --- 2. Process File/Content Links ([...](...)) ---
     def link_replacer(match):
@@ -319,6 +359,10 @@ def process_content(content, base_path, course, content_root=None):
 
     pattern_links = r'(?<!\!)\[(.*?)\]\((.*?)\)'
     content = re.sub(pattern_links, link_replacer, content)
+
+    # --- 3. Restore protected code blocks ---
+    for placeholder, original in code_blocks.items():
+        content = content.replace(placeholder, original)
 
     return content
 
