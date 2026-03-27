@@ -99,7 +99,7 @@ class StudyGuideHandler(BaseHandler):
 
         if needs_render:
             # 4. Render HTML
-            html_body = self.render_quarto_document(processed_content, base_path, filename)
+            html_body = self.render_quarto_document(processed_content, base_path, filename, content_root=content_root)
             if html_body is None:
                 return
 
