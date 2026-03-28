@@ -1,0 +1,9 @@
+---
+title: "Python Documentation"
+canvas:
+  type: external_url
+  url: "https://docs.python.org/3/"
+  published: true
+  indent: 1
+  new_tab: true
+---

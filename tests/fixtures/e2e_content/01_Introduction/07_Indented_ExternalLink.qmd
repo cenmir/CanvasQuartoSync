@@ -1,0 +1,9 @@
+---
+title: "Canvas API Docs"
+canvas:
+  type: external_url
+  url: "https://canvas.instructure.com/doc/api/"
+  published: true
+  indent: 1
+  new_tab: true
+---

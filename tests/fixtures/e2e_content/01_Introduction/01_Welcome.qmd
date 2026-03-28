@@ -1,0 +1,47 @@
+---
+title: "Welcome to the Test Course"
+format:
+  html:
+    page-layout: article
+canvas:
+  type: page
+  published: true
+---
+
+![Test image](../graphics/test_image.png)
+
+This is a **test page** used by the E2E test suite.
+
+## Inline Math
+
+The equation $E = mc^2$ is inline. Here is a fraction: $\frac{1}{2}$.
+
+## Display Math
+
+$$
+\int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}
+$$
+
+## Cross-Links
+
+Link to the assignment: [Test Assignment](../02_Basics/01_Assignment.qmd).
+
+Link to the quiz page: [Classic Quiz](05_Classic_Quiz.qmd).
+
+## External Link
+
+Visit [Python Docs](https://docs.python.org/3/).
+
+## Lists
+
+- Item A
+- Item B
+- Item C
+
+## Table
+
+| Name | Value |
+|:-----|------:|
+| Alpha | 1 |
+| Beta | 2 |
+| Gamma | 3 |
