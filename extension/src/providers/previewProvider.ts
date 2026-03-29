@@ -192,12 +192,15 @@ function getWebviewHtml(
   const htmlPath = path.join(distPath, 'index.html');
 
   // If the webview has been built via Vite, use the built HTML
+  console.log('[CQS Preview] Looking for Vite build at:', htmlPath, 'exists:', fs.existsSync(htmlPath));
   if (fs.existsSync(htmlPath)) {
     let html = fs.readFileSync(htmlPath, 'utf-8');
 
     // Convert local file references to webview URIs
     const distUri = webview.asWebviewUri(vscode.Uri.file(distPath));
-    html = html.replace(/(href|src)="\.?\/?assets\//g, `$1="${distUri}/assets/`);
+    // Replace absolute/relative asset paths with webview URIs
+    // Vite outputs: src="/assets/index.js" or href="/assets/index.css"
+    html = html.replace(/(href|src)="[./]*assets\//g, `$1="${distUri}/assets/`);
 
     // Add CSP meta tag
     const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; script-src ${webview.cspSource} 'unsafe-inline'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource} https: data:; frame-src https:;">`;

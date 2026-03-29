@@ -9,6 +9,16 @@
 }
 .comment-highlight:hover { background: rgba(255, 200, 40, 0.5); }
 
+/* Block-level highlight (for math, complex elements that can't be wrapped in <mark>) */
+.comment-highlight-block {
+  background: rgba(255, 220, 80, 0.15);
+  border-left: 3px solid rgba(220, 180, 40, 0.8);
+  padding-left: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.comment-highlight-block:hover { background: rgba(255, 200, 40, 0.25); }
+
 .comment-indicator {
   display: inline-block;
   width: 6px; height: 6px;

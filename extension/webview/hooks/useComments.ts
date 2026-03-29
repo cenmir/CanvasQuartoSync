@@ -1,51 +1,42 @@
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { Comment } from '../preprocessing/commentParser';
 import {
   extractComments, serializeComments, anchorComments,
-  injectCommentHighlights, generateCommentId,
-  locatePosition, extractContext,
+  generateCommentId, locatePosition, extractContext,
 } from '../preprocessing/commentParser';
 
 /**
- * Comment management hook — adapted from MDViewer for VS Code.
- * Uses postMessage to the extension host for file I/O instead of Tauri invoke.
+ * Comment management hook for VS Code webview.
+ * Comments are saved immediately to the .qmd file via postMessage.
  */
 export function useComments(
   rawContent: string,
   vscodeApi: { postMessage(msg: any): void }
 ) {
   const [comments, setComments] = useState<Comment[]>([]);
-  const [isDirty, setIsDirty] = useState(false);
-  const [showComments, setShowComments] = useState(true);
   const cleanContentRef = useRef('');
   const rawContentRef = useRef('');
+  // Guard: skip the next incoming content update after we save
+  // (to prevent our own write from resetting state)
+  const skipNextUpdate = useRef(false);
 
-  // Parse comments when content changes
+  // Parse comments when content changes (file load / external edit)
   useEffect(() => {
+    if (skipNextUpdate.current) {
+      skipNextUpdate.current = false;
+      return;
+    }
     if (!rawContent) {
       setComments([]);
       cleanContentRef.current = '';
       rawContentRef.current = '';
-      setIsDirty(false);
       return;
     }
     const { cleanContent, comments: parsed } = extractComments(rawContent);
     cleanContentRef.current = cleanContent;
     rawContentRef.current = rawContent;
-    const anchored = anchorComments(cleanContent, parsed);
-    setComments(anchored);
-    setIsDirty(false);
+    setComments(anchorComments(cleanContent, parsed));
   }, [rawContent]);
-
-  const cleanContent = useMemo(() => {
-    if (!rawContent) return '';
-    return cleanContentRef.current || extractComments(rawContent).cleanContent;
-  }, [rawContent]);
-
-  const displayContent = useMemo(() => {
-    if (!showComments || comments.length === 0) return cleanContent;
-    return injectCommentHighlights(cleanContent, comments);
-  }, [cleanContent, comments, showComments]);
 
   const addComment = useCallback((targetText: string, charOffset: number, body: string) => {
     const clean = cleanContentRef.current;
@@ -59,29 +50,37 @@ export function useComments(
       createdAt: now, updatedAt: now, _offset: charOffset,
     };
 
-    setComments(prev => anchorComments(clean, [...prev, newComment]));
-    setIsDirty(true);
-  }, []);
+    const updated = [...comments, newComment];
+    const anchored = anchorComments(clean, updated);
+    setComments(anchored);
 
-  const deleteComment = useCallback((id: string) => {
-    setComments(prev => prev.filter(c => c.id !== id));
-    setIsDirty(true);
-  }, []);
-
-  const saveComments = useCallback(() => {
-    const newContent = serializeComments(rawContentRef.current, comments);
-    // Send to extension host to write to disk
-    vscodeApi.postMessage({ type: 'saveComment', content: newContent });
+    // Save immediately
+    const newContent = serializeComments(rawContentRef.current, anchored);
     rawContentRef.current = newContent;
-    setIsDirty(false);
+    skipNextUpdate.current = true;
+    vscodeApi.postMessage({ type: 'saveComment', content: newContent });
   }, [comments, vscodeApi]);
 
-  const toggleShowComments = useCallback(() => {
-    setShowComments(prev => !prev);
-  }, []);
+  const editComment = useCallback((id: string, newBody: string) => {
+    const now = new Date().toISOString().slice(0, 10);
+    const updated = comments.map(c => c.id === id ? { ...c, body: newBody, updatedAt: now } : c);
+    setComments(updated);
 
-  return {
-    comments, showComments, isDirty, cleanContent, displayContent,
-    addComment, deleteComment, saveComments, toggleShowComments,
-  };
+    const newContent = serializeComments(rawContentRef.current, updated);
+    rawContentRef.current = newContent;
+    skipNextUpdate.current = true;
+    vscodeApi.postMessage({ type: 'saveComment', content: newContent });
+  }, [comments, vscodeApi]);
+
+  const deleteComment = useCallback((id: string) => {
+    const updated = comments.filter(c => c.id !== id);
+    setComments(updated);
+
+    const newContent = serializeComments(rawContentRef.current, updated);
+    rawContentRef.current = newContent;
+    skipNextUpdate.current = true;
+    vscodeApi.postMessage({ type: 'saveComment', content: newContent });
+  }, [comments, vscodeApi]);
+
+  return { comments, addComment, editComment, deleteComment };
 }
