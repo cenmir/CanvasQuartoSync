@@ -152,10 +152,49 @@
           "description": "Automatically open the QMD preview when a .qmd file is opened."
         }
       }
-    }
+    },
+    "walkthroughs": [
+      {
+        "id": "cqs.gettingStarted",
+        "title": "Getting Started with Canvas Quarto Sync",
+        "description": "Set up your first course project and sync to Canvas.",
+        "steps": [
+          {
+            "id": "createProject",
+            "title": "Create a Course Project",
+            "description": "Click the graduation cap in the sidebar, then \"New Project\" to set up your course.\n[Create New Project](command:cqs.newProject)",
+            "media": { "markdown": "Fill in your course name, Canvas ID, and API token." }
+          },
+          {
+            "id": "editConfig",
+            "title": "Configure Canvas Connection",
+            "description": "Open config.toml and set your Canvas course ID and API token path.\n[Open config.toml](command:cqs.openConfig)",
+            "media": { "markdown": "The course ID is the number in your Canvas course URL." }
+          },
+          {
+            "id": "writeContent",
+            "title": "Write Course Content",
+            "description": "Create `.qmd` files with YAML frontmatter. Use `canvas.type` to specify page, assignment, or quiz.",
+            "media": { "markdown": "See the study guide template for an example of frontmatter and content structure." }
+          },
+          {
+            "id": "preview",
+            "title": "Preview Your Content",
+            "description": "Open a `.qmd` file and click the preview icon to see how it will look on Canvas.\n[Open Preview](command:cqs.openPreview)",
+            "media": { "markdown": "The preview updates live as you type." }
+          },
+          {
+            "id": "sync",
+            "title": "Sync to Canvas",
+            "description": "Click \"Sync to Canvas\" in the status bar to push your content to Canvas.\n[Sync Now](command:cqs.syncToCanvas)",
+            "media": { "markdown": "Use the Force flag if you want to re-render everything." }
+          }
+        ]
+      }
+    ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run build:extension",
+    "vscode:prepublish": "npm run build",
     "build": "npm run build:extension && npm run build:webview",
     "build:extension": "node esbuild.mjs --production",
     "build:webview": "vite build",

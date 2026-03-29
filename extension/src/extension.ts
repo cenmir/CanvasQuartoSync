@@ -8,6 +8,7 @@ import { createStatusBar, updateVisibility, dispose as disposeStatusBar } from '
 import { createToggleButtons, registerToggleCommands } from './providers/syncOptions';
 import { registerSidebarViews } from './providers/sidebarTreeView';
 import { openNewProjectPanel } from './providers/newProjectPanel';
+import { showWelcomeIfNeeded } from './providers/welcomePanel';
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('CanvasQuartoSync extension activated');
@@ -36,7 +37,7 @@ export function activate(context: vscode.ExtensionContext) {
       syncFile(context.extensionPath, uri)
     ),
     vscode.commands.registerCommand('cqs.openPreview', () =>
-      openPreview()
+      openPreview(context)
     ),
     vscode.commands.registerCommand('cqs.initCourse', () =>
       initCourse(context.extensionPath)
@@ -48,6 +49,9 @@ export function activate(context: vscode.ExtensionContext) {
       diffWithCanvas(context.extensionPath)
     )
   );
+
+  // Welcome tab on first activation (if no config.toml)
+  showWelcomeIfNeeded(context);
 
   // Re-check status bar visibility when workspace folders change
   context.subscriptions.push(
