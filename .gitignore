@@ -29,6 +29,9 @@ _temp_*
 # Safe to ignore .html if source is .qmd? 
 # Let's stick to _temp_ items which is what our script uses.
 
+# VS Code Extension
+*.vsix
+
 # OS
 .DS_Store
 Thumbs.db

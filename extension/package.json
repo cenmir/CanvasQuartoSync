@@ -3,8 +3,12 @@
   "displayName": "Canvas Quarto Sync",
   "description": "Write courses in Quarto, preview live, sync to Canvas in one click.",
   "version": "0.1.0",
-  "publisher": "Kalle & Mirza",
+  "publisher": "KalleMirza",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cenmir/CanvasQuartoSync"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -151,7 +155,7 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run build",
+    "vscode:prepublish": "npm run build:extension",
     "build": "npm run build:extension && npm run build:webview",
     "build:extension": "node esbuild.mjs --production",
     "build:webview": "vite build",
