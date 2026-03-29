@@ -6,13 +6,17 @@ Manage your entire course as a local Git repository and keep Canvas in sync for 
 
 ## Install
 
-Open PowerShell and paste:
-
+**Windows** (PowerShell):
 ```powershell
 irm https://raw.githubusercontent.com/cenmir/CanvasQuartoSync/main/install.ps1 | iex
 ```
 
-That's it. The installer sets up Python, Git, the Python packages, and the VS Code extension. No manual steps.
+**Linux / macOS** (Terminal):
+```bash
+curl -fsSL https://raw.githubusercontent.com/cenmir/CanvasQuartoSync/main/install.sh | bash
+```
+
+Both installers let you select which components to install (Python, Git, Quarto, venv, repo clone, VS Code extension). Deselect anything you already have. Restart VS Code after install.
 
 ## Quick Start
 
