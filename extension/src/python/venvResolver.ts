@@ -9,8 +9,9 @@ import * as os from 'os';
  * Resolution order:
  * 1. cqs.pythonVenvPath setting
  * 2. CANVAS_QUARTO_VENV environment variable
- * 3. ~/venvs/canvas_quarto_env/
- * 4. Workspace-local .venv/
+ * 3. ~/.venvs/canvas_quarto_env/
+ * 4. ~/venvs/canvas_quarto_env/  (legacy)
+ * 5. Workspace-local .venv/
  */
 export function resolvePython(): string | undefined {
   const candidates: string[] = [];
@@ -29,10 +30,13 @@ export function resolvePython(): string | undefined {
     candidates.push(envPath);
   }
 
-  // 3. Default location
+  // 3. Default location (current)
+  candidates.push(path.join(os.homedir(), '.venvs', 'canvas_quarto_env'));
+
+  // 4. Legacy location
   candidates.push(path.join(os.homedir(), 'venvs', 'canvas_quarto_env'));
 
-  // 4. Workspace-local .venv
+  // 5. Workspace-local .venv
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (workspaceFolders) {
     candidates.push(path.join(workspaceFolders[0].uri.fsPath, '.venv'));
