@@ -7,40 +7,16 @@ import { setSyncing } from '../providers/statusBar';
 
 // ── Diff with Canvas ─────────────────────────────────────────────────
 //
-// Runs sync_to_canvas.py with --check-drift --show-diff to compare
-// local content against what's currently on Canvas. This tells you
-// if someone edited content directly on Canvas since your last sync.
-//
-// Two modes:
-//   - Check all files (full drift check)
-//   - Check a single file (--only <file>)
+// Runs sync_to_canvas.py with --check-drift --diff-json to get
+// structured drift results, then opens VS Code's built-in diff editor
+// for each drifted file showing Canvas (left) vs Local (right).
 
-const TERMINAL_NAME = 'Canvas Drift Check';
-
-function colorizeLine(line: string): string {
-  let clean = line.replace(/\x1b\[[0-9;]*m/g, '');
-  clean = clean.replace(/\[\/?\w[\w\s]*\]/g, '');
-
-  if (/\bDEBUG\b/.test(clean)) return `\x1b[90m${clean}\x1b[0m`;
-  if (/\bERROR\b/.test(clean)) return `\x1b[31m${clean}\x1b[0m`;
-  if (/\bWARNING\b/.test(clean)) return `\x1b[33m${clean}\x1b[0m`;
-  // Drift detected lines
-  if (/\bdrift\b/i.test(clean) || /\bmodified\b/i.test(clean) || /\bchanged\b/i.test(clean))
-    return `\x1b[33m${clean}\x1b[0m`;
-  // Diff output: + lines green, - lines red
-  if (/^\+/.test(clean.trim()) && !/^\+\+\+/.test(clean.trim()))
-    return `\x1b[32m${clean}\x1b[0m`;
-  if (/^-/.test(clean.trim()) && !/^---/.test(clean.trim()))
-    return `\x1b[31m${clean}\x1b[0m`;
-  if (/^@@/.test(clean.trim()))
-    return `\x1b[36m${clean}\x1b[0m`;
-  // No drift
-  if (/\bno drift\b/i.test(clean) || /\bin sync\b/i.test(clean) || /\bno changes\b/i.test(clean))
-    return `\x1b[32m${clean}\x1b[0m`;
-  if (/^Processing module:/i.test(clean.trim()))
-    return `\x1b[1;36m${clean}\x1b[0m`;
-
-  return clean;
+interface DriftItem {
+  file: string;
+  type: string;
+  title: string;
+  canvas_qmd_path: string;
+  local_path: string;
 }
 
 export async function diffWithCanvas(extensionPath: string): Promise<void> {
@@ -86,17 +62,12 @@ export async function diffWithCanvas(extensionPath: string): Promise<void> {
 
   const cqsRoot = resolveCqsRoot(extensionPath);
   const scriptPath = path.join(cqsRoot, 'sync_to_canvas.py');
-  const args = [scriptPath, workspaceRoot, '--check-drift', '--show-diff'];
+  const args = [scriptPath, workspaceRoot, '--check-drift', '--diff-json'];
 
   if (picked.value !== 'all') {
     const relativePath = path.relative(workspaceRoot, picked.value);
     args.push('--only', relativePath);
   }
-
-  // Close previous drift terminal
-  vscode.window.terminals
-    .filter((t) => t.name === TERMINAL_NAME)
-    .forEach((t) => t.dispose());
 
   setSyncing(true);
 
@@ -113,83 +84,130 @@ export async function diffWithCanvas(extensionPath: string): Promise<void> {
     },
     (progress) => {
       return new Promise<void>((resolveProgress) => {
-        const writeEmitter = new vscode.EventEmitter<string>();
-        const closeEmitter = new vscode.EventEmitter<number | void>();
+        let stdout = '';
+        let stderr = '';
 
-        const pty: vscode.Pseudoterminal = {
-          onDidWrite: writeEmitter.event,
-          onDidClose: closeEmitter.event,
-          open() {
-            writeEmitter.fire(
-              `\x1b[1m> ${progressTitle}...\x1b[0m\r\n\r\n`
-            );
-
-            const proc = spawn(pythonPath, args, {
-              cwd: workspaceRoot,
-              env: { ...process.env },
-            });
-
-            proc.stdout?.on('data', (data: Buffer) => {
-              const lines = data.toString().split('\n');
-              for (const line of lines) {
-                if (line.length > 0) {
-                  writeEmitter.fire(colorizeLine(line) + '\r\n');
-
-                  const clean = line
-                    .replace(/\x1b\[[0-9;]*m/g, '')
-                    .replace(/\[\/?\w[\w\s]*\]/g, '');
-                  const trimmed = clean.trim();
-                  if (trimmed && !/^\s*$/.test(trimmed)) {
-                    progress.report({ message: trimmed.slice(0, 80) });
-                  }
-                }
-              }
-            });
-
-            proc.stderr?.on('data', (data: Buffer) => {
-              const text = data.toString().replace(/\n/g, '\r\n');
-              writeEmitter.fire(`\x1b[31m${text}\x1b[0m`);
-            });
-
-            proc.on('close', (code) => {
-              writeEmitter.fire('\r\n');
-              if (code === 0) {
-                writeEmitter.fire(
-                  `\x1b[32m✔ Drift check completed.\x1b[0m\r\n`
-                );
-                vscode.window.showInformationMessage(
-                  'Drift check completed. See terminal for results.'
-                );
-              } else {
-                writeEmitter.fire(
-                  `\x1b[31m✖ Drift check failed (exit code ${code}).\x1b[0m\r\n`
-                );
-                vscode.window.showErrorMessage(
-                  `Drift check failed (exit code ${code}). See terminal for details.`
-                );
-              }
-              setSyncing(false);
-              resolveProgress();
-            });
-
-            proc.on('error', (err) => {
-              writeEmitter.fire(
-                `\x1b[31mError: ${err.message}\x1b[0m\r\n`
-              );
-              setSyncing(false);
-              resolveProgress();
-              closeEmitter.fire(1);
-            });
-          },
-          close() {},
-        };
-
-        const terminal = vscode.window.createTerminal({
-          name: TERMINAL_NAME,
-          pty,
+        const proc = spawn(pythonPath, args, {
+          cwd: workspaceRoot,
+          env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
         });
-        terminal.show();
+
+        proc.stdout?.on('data', (data: Buffer) => {
+          const text = data.toString();
+          stdout += text;
+          // Show log lines as progress
+          for (const line of text.split('\n')) {
+            const clean = line
+              .replace(/\x1b\[[0-9;]*m/g, '')
+              .replace(/\[\/?\w[\w\s]*\]/g, '')
+              .trim();
+            if (clean) {
+              progress.report({ message: clean.slice(0, 80) });
+            }
+          }
+        });
+
+        proc.stderr?.on('data', (data: Buffer) => {
+          stderr += data.toString();
+        });
+
+        proc.on('close', async (code) => {
+          setSyncing(false);
+          resolveProgress();
+
+          if (code !== 0) {
+            vscode.window.showErrorMessage(
+              `Drift check failed (exit code ${code}). ${stderr.slice(0, 200)}`
+            );
+            return;
+          }
+
+          // Parse JSON from stdout
+          const jsonLine = stdout
+            .split('\n')
+            .find((l) => l.startsWith('DRIFT_JSON:'));
+
+          if (!jsonLine) {
+            vscode.window.showInformationMessage(
+              'No drift detected. Canvas content matches your local files.'
+            );
+            return;
+          }
+
+          let driftItems: DriftItem[];
+          try {
+            driftItems = JSON.parse(jsonLine.replace('DRIFT_JSON:', ''));
+          } catch {
+            vscode.window.showErrorMessage('Failed to parse drift results.');
+            return;
+          }
+
+          if (driftItems.length === 0) {
+            vscode.window.showInformationMessage(
+              'No drift detected. Canvas content matches your local files.'
+            );
+            return;
+          }
+
+          // For a single drifted item, open diff directly
+          if (driftItems.length === 1) {
+            await openDiff(driftItems[0]);
+            return;
+          }
+
+          // Multiple drifted items: let user pick which to view
+          const pickItems = driftItems.map((item) => ({
+            label: `$(diff) ${item.title}`,
+            description: `[${item.type}] ${item.file}`,
+            item,
+          }));
+
+          // Add "Open all diffs" option
+          const allOption = {
+            label: '$(diff-multiple) Open all diffs',
+            description: `${driftItems.length} files have drifted`,
+            item: null as DriftItem | null,
+          };
+
+          const selected = await vscode.window.showQuickPick(
+            [allOption, ...pickItems],
+            {
+              placeHolder: `${driftItems.length} file(s) drifted. Which diff to view?`,
+            }
+          );
+
+          if (!selected) return;
+
+          if (selected.item === null) {
+            // Open all diffs
+            for (const item of driftItems) {
+              await openDiff(item);
+            }
+          } else {
+            await openDiff(selected.item);
+          }
+        });
+
+        proc.on('error', (err) => {
+          setSyncing(false);
+          resolveProgress();
+          vscode.window.showErrorMessage(`Drift check error: ${err.message}`);
+        });
       });
     }
+  );
+}
+
+async function openDiff(item: DriftItem): Promise<void> {
+  const canvasUri = vscode.Uri.file(item.canvas_qmd_path);
+  const localUri = vscode.Uri.file(item.local_path);
+
+  const title = `Canvas ↔ Local: ${item.title}`;
+
+  await vscode.commands.executeCommand(
+    'vscode.diff',
+    canvasUri,
+    localUri,
+    title
   );
 }

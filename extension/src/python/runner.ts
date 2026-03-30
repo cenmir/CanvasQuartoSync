@@ -33,7 +33,7 @@ export async function runPythonScript(
   return new Promise((resolve, reject) => {
     const proc: ChildProcess = spawn(pythonPath, [scriptPath, ...args], {
       cwd,
-      env: { ...process.env },
+      env: { ...process.env, PYTHONIOENCODING: "utf-8" },
     });
 
     let stdout = '';

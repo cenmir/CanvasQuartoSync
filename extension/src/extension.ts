@@ -9,6 +9,7 @@ import { createStatusBar, updateVisibility, dispose as disposeStatusBar } from '
 import { createToggleButtons, registerToggleCommands } from './providers/syncOptions';
 import { registerSidebarViews } from './providers/sidebarTreeView';
 import { openNewProjectPanel } from './providers/newProjectPanel';
+import { openModuleStructurePanel } from './providers/moduleStructurePanel';
 import { showWelcomeIfNeeded } from './providers/welcomePanel';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -51,6 +52,9 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.commands.registerCommand('cqs.purgeCourse', () =>
       purgeCourse(context.extensionPath)
+    ),
+    vscode.commands.registerCommand('cqs.showModuleStructure', () =>
+      openModuleStructurePanel(context.extensionPath)
     )
   );
 

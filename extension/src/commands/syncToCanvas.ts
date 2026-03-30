@@ -244,7 +244,7 @@ async function runSync(
 
             const proc = spawn(pythonPath, args, {
               cwd: workspaceRoot,
-              env: { ...process.env },
+              env: { ...process.env, PYTHONIOENCODING: "utf-8" },
             });
 
             proc.stdout?.on('data', (data: Buffer) => {

@@ -91,6 +91,11 @@ export function registerSidebarViews(
       command: 'cqs.diffWithCanvas',
     },
     {
+      label: 'Module Structure',
+      icon: 'list-tree',
+      command: 'cqs.showModuleStructure',
+    },
+    {
       label: 'Open Preview',
       icon: 'open-preview',
       command: 'cqs.openPreview',

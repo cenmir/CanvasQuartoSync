@@ -1,5 +1,6 @@
 import os
 import argparse
+import json
 import sys
 import re
 from canvasapi import Canvas
@@ -14,10 +15,295 @@ from handlers.new_quiz_handler import NewQuizHandler
 from handlers.calendar_handler import CalendarHandler
 from handlers.subheader_handler import SubHeaderHandler
 from handlers.external_link_handler import ExternalLinkHandler
-from handlers.content_utils import upload_file, prune_orphaned_assets, FOLDER_FILES, parse_module_name
+from handlers.content_utils import upload_file, prune_orphaned_assets, FOLDER_FILES, parse_module_name, load_sync_map
 from handlers import __version__
 from handlers.config import load_config, get_api_credentials, get_course_id
 from handlers.drift_detector import check_all_drift
+
+
+def _normalize_name(name: str) -> str:
+    """Normalize a name for fuzzy matching: lowercase, strip special chars, collapse spaces."""
+    name = re.sub(r'^\d+_', '', name)  # strip leading NN_ prefix
+    name = os.path.splitext(name)[0]   # strip file extension
+    name = re.sub(r'[^a-z0-9åäöéü]', '', name.lower())  # keep only alphanumeric + common Swedish
+    return name
+
+
+def _fetch_module_structure(course, content_root: str) -> dict:
+    """Fetch Canvas module structure and match against local files.
+
+    Returns a dict with course info and modules, each with items annotated
+    with whether they exist locally.
+    """
+    sync_map = load_sync_map(content_root)
+
+    # Build reverse map: canvas_id -> local rel_path
+    id_to_local = {}
+    for rel_path, entry in sync_map.items():
+        if isinstance(entry, dict):
+            canvas_id = entry.get('id')
+            if canvas_id is not None:
+                id_to_local[canvas_id] = rel_path
+                id_to_local[str(canvas_id)] = rel_path
+                try:
+                    id_to_local[int(canvas_id)] = rel_path
+                except (ValueError, TypeError):
+                    pass
+
+    # Walk local module dirs to find files
+    # local_files_by_module: { dir_name: [rel_path, ...] }
+    # local_name_index: { normalized_module_name: { normalized_file_name: rel_path } }
+    # local_title_index: { normalized_module_name: { normalized_frontmatter_title: rel_path } }
+    import frontmatter as fm
+    local_files_by_module = {}
+    local_name_index = {}
+    local_title_index = {}
+    for entry in sorted(os.listdir(content_root)):
+        mod_dir = os.path.join(content_root, entry)
+        if not os.path.isdir(mod_dir) or not is_valid_name(entry):
+            continue
+        files = []
+        name_map = {}
+        title_map = {}
+        for fname in sorted(os.listdir(mod_dir)):
+            fpath = os.path.join(mod_dir, fname)
+            if os.path.isfile(fpath) and (fname.endswith('.qmd') or fname.endswith('.md') or fname.endswith('.json') or fname.endswith('.pdf')):
+                rel = os.path.join(entry, fname).replace('\\', '/')
+                files.append(rel)
+                name_map[_normalize_name(fname)] = rel
+                # Read frontmatter title for QMD/MD files
+                if fname.endswith('.qmd') or fname.endswith('.md'):
+                    try:
+                        post = fm.load(fpath)
+                        ft = post.metadata.get('title', '')
+                        if ft:
+                            title_map[_normalize_name(ft)] = rel
+                    except Exception:
+                        pass
+        local_files_by_module[entry] = files
+        norm_mod = _normalize_name(entry)
+        local_name_index[norm_mod] = name_map
+        local_title_index[norm_mod] = title_map
+
+    modules = []
+    for module in course.get_modules():
+        mod_name = module.name
+        mod_items = []
+
+        # Find matching local module dir by normalized name
+        norm_mod = _normalize_name(mod_name)
+        local_mod_files = local_name_index.get(norm_mod, {})
+        local_mod_titles = local_title_index.get(norm_mod, {})
+
+        for item in module.get_module_items():
+            item_type = item.type
+            item_title = getattr(item, 'title', 'Untitled')
+            item_id = getattr(item, 'content_id', None) or getattr(item, 'page_url', None) or getattr(item, 'id', None)
+            published = getattr(item, 'published', False)
+            indent = getattr(item, 'indent', 0)
+            external_url = getattr(item, 'external_url', None)
+
+            # Strategy 1: match via sync map (canvas ID)
+            local_path = None
+            if item_id is not None:
+                local_path = id_to_local.get(item_id) or id_to_local.get(str(item_id))
+            if not local_path and item_type == 'Page':
+                page_url = getattr(item, 'page_url', None)
+                if page_url:
+                    local_path = id_to_local.get(page_url)
+
+            # Strategy 2: match by normalized filename within the same module
+            if not local_path and local_mod_files:
+                norm_title = _normalize_name(item_title)
+                # For File items with "(PDF)" — strip it and match against source QMD
+                norm_title_alt = None
+                if item_type == 'File' and '(PDF)' in item_title:
+                    norm_title_alt = _normalize_name(item_title.replace('(PDF)', ''))
+                # Exact match on filename
+                if norm_title in local_mod_files:
+                    local_path = local_mod_files[norm_title]
+                elif norm_title_alt and norm_title_alt in local_mod_files:
+                    local_path = local_mod_files[norm_title_alt]
+
+            # Strategy 3: match by frontmatter title
+            if not local_path and local_mod_titles:
+                norm_title = _normalize_name(item_title)
+                if norm_title in local_mod_titles:
+                    local_path = local_mod_titles[norm_title]
+
+            # Strategy 4: substring match on filename or frontmatter title
+            if not local_path and (local_mod_files or local_mod_titles):
+                norm_title = _normalize_name(item_title)
+                norm_title_alt = None
+                if item_type == 'File' and '(PDF)' in item_title:
+                    norm_title_alt = _normalize_name(item_title.replace('(PDF)', ''))
+                check_titles = [t for t in [norm_title, norm_title_alt] if t]
+                # Check filenames
+                for local_norm, local_rel in local_mod_files.items():
+                    if not local_norm:
+                        continue
+                    for t in check_titles:
+                        if local_norm in t or t in local_norm:
+                            local_path = local_rel
+                            break
+                    if local_path:
+                        break
+                # Check frontmatter titles
+                if not local_path:
+                    for local_norm, local_rel in local_mod_titles.items():
+                        if not local_norm:
+                            continue
+                        for t in check_titles:
+                            if local_norm in t or t in local_norm:
+                                local_path = local_rel
+                                break
+                        if local_path:
+                            break
+
+            # Collect canvas IDs for API operations
+            content_id = getattr(item, 'content_id', None)
+            page_url = getattr(item, 'page_url', None)
+            item_canvas_id = getattr(item, 'id', None)
+
+            html_url = getattr(item, 'html_url', None) or ''
+
+            item_data = {
+                'title': item_title,
+                'type': item_type,
+                'published': published,
+                'indent': indent,
+                'local_path': local_path,
+                'content_id': content_id,
+                'page_url': page_url,
+                'module_item_id': item_canvas_id,
+                'html_url': html_url,
+            }
+            if external_url:
+                item_data['external_url'] = external_url
+            mod_items.append(item_data)
+
+        modules.append({
+            'name': mod_name,
+            'id': module.id,
+            'published': getattr(module, 'published', False),
+            'items': mod_items,
+        })
+
+    # Also find local modules/files with no Canvas match
+    all_local_paths = set()
+    for files in local_files_by_module.values():
+        all_local_paths.update(files)
+    matched_paths = {item['local_path'] for mod in modules for item in mod['items'] if item['local_path']}
+    unmatched_local = sorted(all_local_paths - matched_paths)
+
+    return {
+        'course_name': course.name,
+        'course_code': getattr(course, 'course_code', ''),
+        'course_id': course.id,
+        'total_students': getattr(course, 'total_students', None),
+        'term': getattr(course, 'term', {}).get('name', '') if isinstance(getattr(course, 'term', None), dict) else '',
+        'workflow_state': getattr(course, 'workflow_state', ''),
+        'default_view': getattr(course, 'default_view', ''),
+        'time_zone': getattr(course, 'time_zone', ''),
+        'storage_quota_mb': getattr(course, 'storage_quota_mb', None),
+        'created_at': getattr(course, 'created_at', ''),
+        'modules': modules,
+        'unmatched_local_files': unmatched_local,
+    }
+
+
+def _import_single_item(course, content_root: str, item_json: str) -> dict:
+    """Import a single Canvas item to a local QMD file."""
+    from import_from_canvas import (
+        HtmlToMarkdown, generate_page_qmd, generate_assignment_qmd,
+        generate_external_link_qmd, generate_subheader_qmd, sanitize_filename
+    )
+
+    try:
+        item = json.loads(item_json)
+    except json.JSONDecodeError as e:
+        return {'success': False, 'error': f'Invalid JSON: {e}'}
+
+    module_dir = item.get('module_dir', '')
+    item_type = item.get('item_type', '')
+    title = item.get('title', 'Untitled')
+    content_id = item.get('content_id')
+    page_url = item.get('page_url')
+    published = item.get('published', False)
+    indent = item.get('indent', 0)
+    external_url = item.get('external_url', '')
+
+    # Ensure module dir exists
+    mod_path = os.path.join(content_root, module_dir)
+    os.makedirs(mod_path, exist_ok=True)
+
+    converter = HtmlToMarkdown(
+        sync_map=load_sync_map(content_root),
+        content_root=content_root
+    )
+
+    # Determine next file index
+    existing = sorted(f for f in os.listdir(mod_path) if is_valid_name(f))
+    if existing:
+        last_num = int(re.match(r'^(\d+)', existing[-1]).group(1))
+        next_idx = last_num + 1
+    else:
+        next_idx = 1
+    prefix = f'{next_idx:02d}'
+    safe_name = sanitize_filename(title)
+
+    content = ''
+    ext = '.qmd'
+
+    try:
+        if item_type == 'Page' and page_url:
+            page = course.get_page(page_url)
+            body_html = getattr(page, 'body', '') or ''
+            body_md = converter.convert(body_html)
+            content = generate_page_qmd(title, body_md, published)
+
+        elif item_type == 'Assignment' and content_id:
+            assignment = course.get_assignment(content_id)
+            body_html = getattr(assignment, 'description', '') or ''
+            body_md = converter.convert(body_html)
+            content = generate_assignment_qmd(title, body_md, assignment)
+
+        elif item_type == 'ExternalUrl':
+            new_tab = item.get('new_tab', False)
+            content = generate_external_link_qmd(title, external_url, published, new_tab)
+
+        elif item_type == 'SubHeader':
+            content = generate_subheader_qmd(title, published, indent)
+            ext = '.md'
+
+        elif item_type == 'File' and content_id:
+            # Download file
+            try:
+                file_obj = course.get_file(content_id)
+                original_name = getattr(file_obj, 'filename', safe_name)
+                file_path = os.path.join(mod_path, f'{prefix}_{original_name}')
+                file_obj.download(file_path)
+                rel = os.path.relpath(file_path, content_root).replace('\\', '/')
+                return {'success': True, 'file': rel}
+            except Exception as e:
+                return {'success': False, 'error': f'File download failed: {e}'}
+
+        else:
+            return {'success': False, 'error': f'Unsupported item type: {item_type}'}
+
+    except Exception as e:
+        return {'success': False, 'error': f'Canvas API error: {e}'}
+
+    if not content:
+        return {'success': False, 'error': 'No content generated'}
+
+    filename = f'{prefix}_{safe_name}{ext}'
+    filepath = os.path.join(mod_path, filename)
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+    rel = os.path.relpath(filepath, content_root).replace('\\', '/')
+    return {'success': True, 'file': rel}
 
 
 def is_valid_name(name):
@@ -36,7 +322,10 @@ def main():
     parser.add_argument("--force", "-f", action="store_true", help="Force re-render all files (ignore cached mtimes).")
     parser.add_argument("--check-drift", action="store_true", help="Check if Canvas content was modified outside sync (no sync performed).")
     parser.add_argument("--show-diff", action="store_true", help="Show full diff when using --check-drift.")
+    parser.add_argument("--diff-json", action="store_true", help="Output drift results as JSON (for VS Code extension).")
     parser.add_argument("--only", help="Sync only a specific file (relative path from content dir, e.g. '01_Intro/02_Welcome.qmd').")
+    parser.add_argument("--module-structure", action="store_true", help="Output Canvas module structure as JSON (for VS Code extension).")
+    parser.add_argument("--import-item", help="Import a single Canvas item as JSON: {\"module_dir\":...,\"item_type\":...,\"content_id\":...,\"page_url\":...,\"title\":...,\"published\":...,\"indent\":...,\"external_url\":...}")
 
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", "-v", action="store_true", help="Show detailed debug output.")
@@ -78,16 +367,46 @@ def main():
     logger.info("[cyan]Connecting to Canvas...[/cyan]")
     try:
         canvas = Canvas(API_URL, API_TOKEN)
-        course = canvas.get_course(course_id)
+        course = canvas.get_course(course_id, include=['total_students', 'term'])
         logger.info("[green]Connected to course:[/green] [bold]%s[/bold] (ID: %s)", course.name, course.id)
     except Exception as e:
         logger.error("[red]Connection failed:[/red] %s", e)
+        return
+
+    # Module structure mode: output Canvas module structure as JSON, then exit
+    if args.module_structure:
+        structure = _fetch_module_structure(course, content_root)
+        print(f'MODULE_STRUCTURE_JSON:{json.dumps(structure, ensure_ascii=False)}')
+        return
+
+    # Import single item mode
+    if args.import_item:
+        result = _import_single_item(course, content_root, args.import_item)
+        print(f'IMPORT_RESULT_JSON:{json.dumps(result, ensure_ascii=False)}')
         return
 
     # Drift check mode: only check for Canvas-side modifications, then exit
     if args.check_drift:
         logger.info("[bold cyan]Checking for Canvas-side modifications...[/bold cyan]")
         drifted = check_all_drift(course, content_root)
+
+        # JSON output mode for VS Code extension
+        if args.diff_json:
+            result = []
+            for item in drifted:
+                result.append({
+                    'file': item['file'],
+                    'type': item['type'],
+                    'title': item['title'],
+                    'canvas_qmd_path': item.get('canvas_qmd_path', ''),
+                    'local_path': os.path.join(content_root, item['file'].replace('/', os.sep)),
+                })
+            # Write JSON to stdout on a clearly marked line for the extension to parse
+            print(f'DRIFT_JSON:{json.dumps(result)}')
+            if not drifted:
+                logger.info("[green]No drift detected. Canvas content matches last sync.[/green]")
+            return
+
         if drifted:
             logger.warning("[yellow]%d item(s) have been modified on Canvas since last sync:[/yellow]", len(drifted))
             for item in drifted:

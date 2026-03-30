@@ -22,6 +22,7 @@ build/
 # Quarto / Sync Artifacts
 _temp_*
 .canvas_snapshots/
+.canvas_diff_temp/
 *_files/
 *.html
 !0*_*.html # Don't ignore manual HTML files if they exist, but do ignore generated ones.
