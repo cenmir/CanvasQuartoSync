@@ -1,0 +1,29 @@
+lang: en
+
+format:
+  html:
+    page-layout: article
+    toc: false
+    number-sections: false
+
+  pdf:
+    documentclass: article
+    papersize: a4
+    geometry:
+      - margin=2.5cm
+    toc: false
+    number-sections: true
+    colorlinks: true
+    include-in-header:
+      text: |
+        \usepackage{hyperref}
+        \usepackage{booktabs}
+        \usepackage{longtable}
+        \usepackage{array}
+        \usepackage{graphicx}
+        \usepackage{xcolor}
+        \usepackage{colortbl}
+        \definecolor{brand-primary}{RGB}{150,27,129}
+        \definecolor{brand-heading}{RGB}{0,56,101}
+        \renewcommand{\familydefault}{\sfdefault}
+        \renewcommand{\maketitle}{}

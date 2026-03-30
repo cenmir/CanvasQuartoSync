@@ -1,0 +1,8 @@
+course_name = "E2E Test Course"
+course_code = "TEST101"
+credits = "7.5 ECTS"
+semester = "Spring 2026"
+language = "english"
+
+[branding]
+css = "branding.css"

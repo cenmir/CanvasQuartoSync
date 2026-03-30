@@ -1,0 +1,18 @@
+:root {
+  --brand-primary: #961B81;
+  --brand-heading: #003865;
+  --brand-accent: #55AAA7;
+  --brand-warn: #FFB500;
+  --brand-grey: #797979;
+}
+
+h1, h2 { color: var(--brand-heading) !important; }
+h3 { color: var(--brand-primary) !important; }
+a { color: var(--brand-primary) !important; }
+table th, table thead tr { background-color: var(--brand-heading) !important; color: #fff !important; }
+
+.callout-tip       { border-color: #198754; background-color: #d1e7dd; --callout-icon: "\U0001f4a1"; }
+.callout-important { border-color: #dc3545; background-color: #f8d7da; --callout-icon: "\U00002757"; }
+.callout-warning   { border-color: #ffc107; background-color: #fff3cd; --callout-icon: "\U000026a0"; }
+.callout-note      { border-color: #0d6efd; background-color: #cfe2ff; --callout-icon: "\U0001f4dd"; }
+.callout-caution   { border-color: #fd7e14; background-color: #ffe5d0; --callout-icon: "\U0001f536"; }

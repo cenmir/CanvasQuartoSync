@@ -60,6 +60,16 @@ CanvasQuartoSync/
 ├── DISCLAIMER.md
 ├── LICENSE                    # MIT
 ├── requirements.txt           # Python package dependencies
+├── requirements-dev.txt       # Test dependencies (pytest)
+├── pytest.ini                 # Pytest configuration and markers
+├── TESTING.md                 # Full testing guide
+├── tests/                     # Test suite
+│   ├── conftest.py            # Shared fixtures, --course-id CLI option, global state reset
+│   ├── unit/                  # Pure logic tests (no external deps)
+│   ├── integration/           # Mocked Canvas API tests
+│   ├── e2e/                   # Real Canvas course tests
+│   └── fixtures/
+│       └── e2e_content/       # Stable test content for E2E tests
 ├── install.ps1                # One-line installer (Python + Git + packages + VS Code extension)
 └── run_sync_here.bat          # Portable launcher (copy to content folder, double-click)
 ```
@@ -166,12 +176,53 @@ quarto             # External CLI — must be in PATH
 
 ---
 
+## Testing
+
+The project has a full test suite in `tests/`. **Always run the tests before and after making changes** to verify nothing is broken.
+
+```powershell
+# Run all fast tests (unit + integration, no external deps)
+.venv\Scripts\python -m pytest tests/unit/ tests/integration/ -v
+
+# Run a single test file
+.venv\Scripts\python -m pytest tests/unit/test_qmd_quiz_parser.py -v
+
+# Run E2E tests against a real Canvas test course
+.venv\Scripts\python -m pytest tests/e2e/ -v -m canvas --course-id 12345
+```
+
+See `TESTING.md` for the full guide including how to set up E2E credentials.
+
+### Test tiers
+
+| Tier | Location | Requires | Speed |
+|------|----------|----------|-------|
+| Unit | `tests/unit/` | Nothing | < 1 s |
+| Integration | `tests/integration/` | Nothing (mocked Canvas API) | < 1 s |
+| E2E | `tests/e2e/` | Canvas credentials + Quarto CLI | Minutes |
+
+### Writing tests for new functionality
+
+**Every new feature or bug fix must be accompanied by tests.** This is the primary way to ensure changes do not break existing functionality.
+
+- **New content type / handler** → add `can_handle()` tests in `tests/unit/test_handler_detection.py` and a sync integration test in `tests/integration/`. Add at least one representative content file to `tests/fixtures/e2e_content/` and a corresponding assertion in `tests/e2e/test_full_sync.py`.
+- **New parser logic** (quiz format, preprocessor, etc.) → add unit tests directly in a `tests/unit/test_<module>.py` file covering the happy path plus edge cases.
+- **New content utility** (upload logic, cross-linking, etc.) → add unit tests in `tests/unit/test_content_utils.py` and, if Canvas API interaction is involved, a mocked integration test.
+- **Bug fix** → add a test that reproduces the bug first, then fix it. This prevents regressions.
+
+Follow the **Arrange / Act / Assert** pattern (see `TESTING.md`). Group related tests in a class and use descriptive names (`test_rejects_missing_prefix`, not `test_case_3`).
+
+---
+
 ## Common Tasks for AI Assistants
 
 ### Adding a new content type
 1. Create a new handler class inheriting `BaseHandler`.
 2. Implement `can_handle()` and `sync()`.
 3. Register the handler in `sync_to_canvas.py`'s handler chain.
+4. Add `can_handle()` tests to `tests/unit/test_handler_detection.py`.
+5. Add a representative content file to `tests/fixtures/e2e_content/`.
+6. Add E2E assertions to `tests/e2e/test_full_sync.py`.
 
 ### Modifying Quarto rendering
 - The render pipeline is in `PageHandler.sync()` and `AssignmentHandler.sync()` (duplicated — see Improvements).
