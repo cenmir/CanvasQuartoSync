@@ -22,10 +22,10 @@ from handlers.drift_detector import check_all_drift
 
 def is_valid_name(name):
     """
-    Checks if the name starts with exactly two digits followed by an underscore.
-    Example: '01_Intro' -> True, 'Intro' -> False, '1_Intro' -> False
+    Checks if the name starts with two or more digits followed by an underscore.
+    Example: '01_Intro' -> True, '000_Link' -> True, 'Intro' -> False, '1_Intro' -> False
     """
-    return bool(re.match(r'^\d{2}_', name))
+    return bool(re.match(r'^\d{2,}_', name))
 
 def main():
     parser = argparse.ArgumentParser(description="Sync local content to Canvas.")
