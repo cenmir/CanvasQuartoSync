@@ -26,6 +26,9 @@ interface ModuleItem {
   page_url?: string | null;
   module_item_id?: number | null;
   html_url?: string;
+  updated_at?: string;
+  local_mtime?: string;
+  local_only?: boolean;
 }
 
 interface Module {
@@ -35,12 +38,18 @@ interface Module {
   items: ModuleItem[];
 }
 
+interface LocalOnlyModule {
+  dir_name: string;
+  files: string[];
+}
+
 interface StructureData {
   course_name: string;
   course_code: string;
   course_id: number;
   modules: Module[];
-  unmatched_local_files: string[];
+  local_only_modules?: LocalOnlyModule[];
+  unmatched_local_files?: string[]; // backward compat
 }
 
 export async function openModuleStructurePanel(extensionPath: string): Promise<void> {
@@ -136,6 +145,8 @@ export async function openModuleStructurePanel(extensionPath: string): Promise<v
       if (msg.url) {
         vscode.env.openExternal(vscode.Uri.parse(msg.url));
       }
+    } else if (msg.type === 'createItem') {
+      await handleCreateItem(extensionPath, msg.moduleDir, msg.itemType);
     }
   });
 
@@ -242,6 +253,88 @@ async function handleImport(extensionPath: string, itemData: Record<string, unkn
   }
 }
 
+import * as fs from 'fs';
+
+const ITEM_TEMPLATES: Record<string, string> = {
+  page: `---
+title: "New Page"
+canvas:
+  type: page
+  published: false
+---
+
+`,
+  assignment: `---
+title: "New Assignment"
+canvas:
+  type: assignment
+  published: false
+  points: 0
+  submission_types:
+  - online_upload
+---
+
+`,
+  quiz: `---
+title: "New Quiz"
+canvas:
+  type: quiz
+  published: false
+---
+
+`,
+  external_url: `---
+title: "New Link"
+canvas:
+  type: external_url
+  url: ""
+  published: false
+  new_tab: true
+---
+`,
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  page: 'Page',
+  assignment: 'Assignment',
+  quiz: 'Quiz',
+  external_url: 'External_URL',
+};
+
+async function handleCreateItem(extensionPath: string, moduleDir: string, itemType: string): Promise<void> {
+  const ws = getWorkspaceRoot();
+  if (!ws) return;
+
+  const template = ITEM_TEMPLATES[itemType];
+  if (!template) {
+    vscode.window.showErrorMessage('Unknown item type: ' + itemType);
+    return;
+  }
+
+  const modPath = path.join(ws, moduleDir);
+  if (!fs.existsSync(modPath)) {
+    fs.mkdirSync(modPath, { recursive: true });
+  }
+
+  // Determine next file index
+  const existing = fs.readdirSync(modPath).filter(f => /^\d{2,}_/.test(f)).sort();
+  let nextIdx = 1;
+  if (existing.length > 0) {
+    const m = existing[existing.length - 1].match(/^(\d+)/);
+    if (m) nextIdx = parseInt(m[1], 10) + 1;
+  }
+
+  const prefix = nextIdx.toString().padStart(2, '0');
+  const label = TYPE_LABELS[itemType] || 'Item';
+  const filename = `${prefix}_New_${label}.qmd`;
+  const filePath = path.join(modPath, filename);
+
+  fs.writeFileSync(filePath, template, 'utf-8');
+  const uri = vscode.Uri.file(filePath);
+  await vscode.window.showTextDocument(uri);
+  await refreshPanel(extensionPath);
+}
+
 // ── Fetch from Python ───────────────────────────────────────────────
 
 async function fetchStructure(
@@ -302,6 +395,22 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+function relativeTime(isoStr: string): string {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  const now = new Date();
+  const diffMs = now.getTime() - d.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return diffMin + 'm ago';
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return diffHr + 'h ago';
+  const diffDays = Math.floor(diffHr / 24);
+  if (diffDays < 30) return diffDays + 'd ago';
+  // Show date
+  return d.toLocaleDateString('sv-SE', { month: 'short', day: 'numeric' });
+}
+
 const TYPE_ICONS: Record<string, string> = {
   Page: '&#x1F4C4;',
   Assignment: '&#x1F4DD;',
@@ -313,9 +422,11 @@ const TYPE_ICONS: Record<string, string> = {
 };
 
 function renderBody(data: StructureData): string {
-  const totalItems = data.modules.reduce((s, m) => s + m.items.length, 0);
-  const localItems = data.modules.reduce((s, m) => s + m.items.filter(i => i.local_path).length, 0);
-  const canvasOnly = totalItems - localItems;
+  // Compute counts excluding local-only items from canvas totals
+  const canvasItems = data.modules.reduce((s, m) => s + m.items.filter(i => !i.local_only).length, 0);
+  const syncedItems = data.modules.reduce((s, m) => s + m.items.filter(i => i.local_path && !i.local_only).length, 0);
+  const canvasOnly = canvasItems - syncedItems;
+  const notSyncedItems = data.modules.reduce((s, m) => s + m.items.filter(i => i.local_only).length, 0);
 
   let h = '';
 
@@ -331,29 +442,40 @@ function renderBody(data: StructureData): string {
   if ((data as any).term) infoParts.push('Term: ' + esc((data as any).term));
   if ((data as any).workflow_state) infoParts.push(esc((data as any).workflow_state));
   infoParts.push(data.modules.length + ' modules');
-  infoParts.push(totalItems + ' items');
+  infoParts.push(canvasItems + ' items');
   h += '<div class="subtitle">' + infoParts.join(' &middot; ') + '</div>';
   h += '</div><button class="refresh-btn" onclick="refresh()">Refresh</button></div>';
 
   // Stats
   h += '<div class="stats">';
-  h += '<div class="stat"><span class="num" style="color:#198754">' + localItems + '</span> synced locally</div>';
+  h += '<div class="stat"><span class="num" style="color:#198754">' + syncedItems + '</span> synced</div>';
   h += '<div class="stat"><span class="num" style="color:#dc3545">' + canvasOnly + '</span> Canvas-only</div>';
+  if (notSyncedItems > 0) {
+    h += '<div class="stat"><span class="num" style="color:#0d6efd">' + notSyncedItems + '</span> not synced</div>';
+  }
   h += '</div>';
 
   // Legend
   h += '<div class="legend">';
-  h += '<div class="legend-item"><span class="dot local"></span> Synced locally</div>';
-  h += '<div class="legend-item"><span class="dot canvas-only"></span> Canvas-only (not imported)</div>';
-  h += '<div class="legend-item"><span class="dot unpublished"></span> Unpublished</div>';
+  h += '<div class="legend-item"><span class="dot local"></span> In sync</div>';
+  h += '<div class="legend-item"><span class="dot local-newer"></span> Local newer</div>';
+  h += '<div class="legend-item"><span class="dot canvas-newer"></span> Canvas newer</div>';
+  h += '<div class="legend-item"><span class="dot canvas-only"></span> Canvas-only</div>';
+  h += '<div class="legend-item"><span class="dot not-synced"></span> Not synced</div>';
   h += '</div>';
 
   // Modules
   for (let mi = 0; mi < data.modules.length; mi++) {
     const mod = data.modules[mi];
-    const localCount = mod.items.filter(i => i.local_path).length;
+    const modCanvasItems = mod.items.filter(i => !i.local_only);
+    const modLocalOnly = mod.items.filter(i => i.local_only);
+    const modSynced = modCanvasItems.filter(i => i.local_path).length;
     const pubCls = mod.published ? 'published' : 'draft';
     const pubLbl = mod.published ? 'Published' : 'Draft';
+
+    // Find local module dir for import/create
+    const modDirGuess = mod.items.find(i => i.local_path)?.local_path?.split('/')[0]
+      || ((mi + 1).toString().padStart(2, '0') + '_' + mod.name.replace(/[^a-zA-Z0-9åäöÅÄÖ ]/g, '').replace(/ /g, '_'));
 
     h += '<div class="module">';
     h += '<div class="module-header">';
@@ -361,26 +483,58 @@ function renderBody(data: StructureData): string {
     h += '<span onclick="toggleModule(' + mi + ')" style="flex:1;cursor:pointer">' + esc(mod.name) + '</span>';
     h += ' <span class="pub-badge ' + pubCls + '">' + pubLbl + '</span>';
 
-    // "Import Module" button if there are canvas-only items
-    const canvasOnlyItems = mod.items.filter(i => !i.local_path);
-    if (canvasOnlyItems.length > 0) {
-      h += '<button class="action-btn import-btn module-import-btn" onclick="event.stopPropagation();doImportModule(' + mi + ')" title="Import all '
-        + canvasOnlyItems.length + ' Canvas-only items in this module">Import Module &#x2193; (' + canvasOnlyItems.length + ')</button>';
+    // "Import Module" button if there are canvas-only items (exclude local-only)
+    const canvasOnlyInMod = modCanvasItems.filter(i => !i.local_path);
+    if (canvasOnlyInMod.length > 0) {
+      h += '<button class="action-btn import-btn module-action-btn" onclick="event.stopPropagation();doImportModule(' + mi + ')" title="Import all '
+        + canvasOnlyInMod.length + ' Canvas-only items">Import &#x2193; (' + canvasOnlyInMod.length + ')</button>';
     }
 
-    h += '<span class="count">' + localCount + '/' + mod.items.length + ' local</span>';
+    // "+ New" dropdown
+    h += '<div class="new-dropdown" style="position:relative;display:inline-block">';
+    h += '<button class="action-btn new-btn module-action-btn" onclick="event.stopPropagation();toggleNewMenu(' + mi + ')" title="Create new item in this module">+ New &#x25BE;</button>';
+    h += '<div class="new-menu hidden" id="new-menu-' + mi + '">';
+    const escDir = esc(modDirGuess).replace(/'/g, "\\'");
+    h += '<div class="new-menu-item" onclick="doCreateItem(\'' + escDir + '\',\'page\')">&#x1F4C4; Page</div>';
+    h += '<div class="new-menu-item" onclick="doCreateItem(\'' + escDir + '\',\'assignment\')">&#x1F4DD; Assignment</div>';
+    h += '<div class="new-menu-item" onclick="doCreateItem(\'' + escDir + '\',\'quiz\')">&#x2753; Quiz</div>';
+    h += '<div class="new-menu-item" onclick="doCreateItem(\'' + escDir + '\',\'external_url\')">&#x1F517; External URL</div>';
+    h += '</div></div>';
+
+    // Count
+    let countText = modSynced + '/' + modCanvasItems.length + ' synced';
+    if (modLocalOnly.length > 0) {
+      countText += ' + ' + modLocalOnly.length + ' local';
+    }
+    h += '<span class="count">' + countText + '</span>';
     h += '</div>';
     h += '<div class="module-items" id="items-' + mi + '">';
 
-    // Find local module dir for import (first matching item's dir, or guess from module name)
-    const modDirGuess = mod.items.find(i => i.local_path)?.local_path?.split('/')[0]
-      || ((mi + 1).toString().padStart(2, '0') + '_' + mod.name.replace(/[^a-zA-Z0-9åäöÅÄÖ ]/g, '').replace(/ /g, '_'));
-
     for (const item of mod.items) {
-      const icon = TYPE_ICONS[item.type] || '&#x1F4E6;';
+      const isLocalOnly = !!item.local_only;
       const hasLocal = !!item.local_path;
-      const dotCls = hasLocal ? 'local' : 'canvas-only';
-      const unpubCls = item.published ? '' : ' unpublished';
+      const icon = isLocalOnly ? '&#x1F4C4;' : (TYPE_ICONS[item.type] || '&#x1F4E6;');
+
+      // Determine dot color based on sync state
+      let dotCls: string;
+      if (isLocalOnly) {
+        dotCls = 'not-synced';
+      } else if (!hasLocal) {
+        dotCls = 'canvas-only';
+      } else if (item.updated_at && item.local_mtime) {
+        const ct = new Date(item.updated_at).getTime();
+        const lt = new Date(item.local_mtime).getTime();
+        if (ct > lt + 60000) {
+          dotCls = 'canvas-newer';
+        } else if (lt > ct + 60000) {
+          dotCls = 'local-newer';
+        } else {
+          dotCls = 'local';
+        }
+      } else {
+        dotCls = 'local';
+      }
+      const unpubCls = (item.published === false && !isLocalOnly) ? ' unpublished' : '';
       const clickCls = (hasLocal || item.html_url) ? ' clickable' : '';
       const safePath = hasLocal ? esc(item.local_path!.replace(/\\/g, '/')) : '';
       let titleClick = '';
@@ -390,8 +544,12 @@ function renderBody(data: StructureData): string {
         titleClick = ' onclick="openUrl(\'' + esc(item.html_url).replace(/'/g, "\\'") + '\')"';
       }
 
-      // Build import data for canvas-only items (used by checkbox selection)
-      const importDataObj = !hasLocal ? {
+      // Badge text
+      const badgeText = isLocalOnly ? 'Not synced' : item.type;
+      const badgeCls = isLocalOnly ? ' not-synced-badge' : '';
+
+      // Build import data for canvas-only items
+      const importDataObj = (!hasLocal && !isLocalOnly) ? {
         module_dir: modDirGuess,
         item_type: item.type,
         content_id: item.content_id || null,
@@ -404,26 +562,55 @@ function renderBody(data: StructureData): string {
 
       // 7 grid cells: checkbox, dot, icon, title, badge, path, actions
       const dataKind = hasLocal ? 'sync' : 'import';
-      const dataVal = hasLocal ? safePath : esc(JSON.stringify(importDataObj));
+      const dataVal = hasLocal ? safePath : (importDataObj ? esc(JSON.stringify(importDataObj)) : '');
       h += '<div class="item' + clickCls + '" data-kind="' + dataKind + '" data-value="' + dataVal.replace(/"/g, '&quot;') + '">';
       h += '<span class="cb-cell"><input type="checkbox" class="item-cb" onclick="event.stopPropagation();onCheckChanged()" data-kind="' + dataKind + '" data-value="' + dataVal.replace(/"/g, '&quot;') + '"></span>';
       h += '<span class="status-dot ' + dotCls + unpubCls + '"></span>';
       h += '<span class="icon">' + icon + '</span>';
       h += '<span class="title"' + titleClick + '>' + esc(item.title) + '</span>';
-      h += '<span class="type-badge">' + item.type + '</span>';
+      h += '<span class="type-badge' + badgeCls + '">' + badgeText + '</span>';
+      const updatedText = item.updated_at ? relativeTime(item.updated_at) : '';
+      const updatedFull = item.updated_at || '';
+      h += '<span class="updated" title="' + esc(updatedFull) + '">' + updatedText + '</span>';
       const pathText = hasLocal ? esc(item.local_path!) : (item.external_url ? esc(item.external_url) : '');
       h += '<span class="local-path" title="' + pathText + '">' + pathText + '</span>';
 
+      // Determine sync direction for items with both local and canvas
+      let syncDir: 'in-sync' | 'canvas-newer' | 'local-newer' | 'unknown' = 'unknown';
+      if (hasLocal && !isLocalOnly && item.updated_at && item.local_mtime) {
+        const canvasTime = new Date(item.updated_at).getTime();
+        const localTime = new Date(item.local_mtime).getTime();
+        const drift = 60000; // 1 minute tolerance
+        if (Math.abs(canvasTime - localTime) < drift) {
+          syncDir = 'in-sync';
+        } else if (canvasTime > localTime) {
+          syncDir = 'canvas-newer';
+        } else {
+          syncDir = 'local-newer';
+        }
+      }
+
       // Action buttons
       h += '<span class="actions">';
-      if (hasLocal) {
-        // Diff + Sync buttons
-        h += '<button class="action-btn diff-btn" onclick="event.stopPropagation();doDiff(\''
-          + safePath.replace(/'/g, "\\'") + '\')" title="Compare with Canvas">Diff</button>';
+      if (isLocalOnly) {
+        // Local-only: just Sync button
         h += '<button class="action-btn sync-btn" onclick="event.stopPropagation();doSync(\''
           + safePath.replace(/'/g, "\\'") + '\')" title="Upload to Canvas">Sync &#x2191;</button>';
+      } else if (hasLocal) {
+        // Always show Diff
+        h += '<button class="action-btn diff-btn" onclick="event.stopPropagation();doDiff(\''
+          + safePath.replace(/'/g, "\\'") + '\')" title="Compare with Canvas">Diff</button>';
+        if (syncDir === 'canvas-newer') {
+          // Canvas is newer — primary action is Import (overwrite local)
+          h += '<button class="action-btn import-btn" onclick="event.stopPropagation();doDiff(\''
+            + safePath.replace(/'/g, "\\'") + '\')" title="Canvas has changes — view diff to update local">&#x2193; Review</button>';
+        } else {
+          // Local is newer or in-sync — primary action is Sync
+          h += '<button class="action-btn sync-btn" onclick="event.stopPropagation();doSync(\''
+            + safePath.replace(/'/g, "\\'") + '\')" title="Upload to Canvas">Sync &#x2191;</button>';
+        }
       } else {
-        // Import button (only for canvas-only items)
+        // Canvas-only: Import
         const importData = esc(JSON.stringify(importDataObj));
         h += '<button class="action-btn import-btn" onclick="event.stopPropagation();doImport(\''
           + importData.replace(/'/g, '&#39;') + '\')" title="Import from Canvas">Import &#x2193;</button>';
@@ -434,9 +621,9 @@ function renderBody(data: StructureData): string {
 
     h += '</div></div>';
 
-    // Hidden data for module-level import
-    if (canvasOnlyItems.length > 0) {
-      const moduleImportItems = canvasOnlyItems.map(item => ({
+    // Store module import data as data attributes on hidden elements
+    if (canvasOnlyInMod.length > 0) {
+      const moduleImportItems = canvasOnlyInMod.map(item => ({
         module_dir: modDirGuess,
         item_type: item.type,
         content_id: item.content_id || null,
@@ -446,30 +633,46 @@ function renderBody(data: StructureData): string {
         indent: item.indent,
         external_url: item.external_url || '',
       }));
-      h += '<script>if(!window._moduleImportData)window._moduleImportData={};window._moduleImportData[' + mi + ']='
-        + JSON.stringify(JSON.stringify(moduleImportItems)) + ';</script>';
+      h += '<div class="module-import-data" data-mi="' + mi + '" data-items="'
+        + esc(JSON.stringify(moduleImportItems)) + '" style="display:none"></div>';
     }
   }
 
-  // Batch action bar (hidden by default, shown when items are checked)
+  // Local-only modules (no Canvas match)
+  if (data.local_only_modules && data.local_only_modules.length > 0) {
+    h += '<div class="module orphan-module">';
+    h += '<div class="module-header">';
+    h += '<span class="toggle" id="toggle-orphan" onclick="toggleModule(\'orphan\')">&#9660;</span> ';
+    h += '<span onclick="toggleModule(\'orphan\')" style="flex:1;cursor:pointer">Local Only (no Canvas module)</span>';
+    const orphanCount = data.local_only_modules.reduce((s, m) => s + m.files.length, 0);
+    h += '<span class="count">' + orphanCount + ' files</span>';
+    h += '</div>';
+    h += '<div class="module-items" id="items-orphan">';
+    for (const om of data.local_only_modules) {
+      for (const f of om.files) {
+        const safeF = esc(f.replace(/\\/g, '/'));
+        h += '<div class="item clickable">';
+        h += '<span class="cb-cell"></span>';
+        h += '<span class="status-dot not-synced"></span>';
+        h += '<span class="icon">&#x1F4C4;</span>';
+        h += '<span class="title" onclick="openFile(\'' + safeF.replace(/'/g, "\\'") + '\')">' + esc(f) + '</span>';
+        h += '<span class="type-badge not-synced-badge">No module</span>';
+        h += '<span class="updated"></span>';
+        h += '<span class="local-path"></span>';
+        h += '<span class="actions"></span>';
+        h += '</div>';
+      }
+    }
+    h += '</div></div>';
+  }
+
+  // Batch action bar
   h += '<div id="batch-bar" class="batch-bar hidden">';
   h += '<span id="batch-count">0 selected</span>';
   h += '<button class="action-btn sync-btn" onclick="doBatchSync()" id="batch-sync-btn" style="display:none">Sync selected &#x2191;</button>';
   h += '<button class="action-btn import-btn" onclick="doBatchImport()" id="batch-import-btn" style="display:none">Import selected &#x2193;</button>';
   h += '<button class="action-btn" onclick="clearSelection()">Clear</button>';
   h += '</div>';
-
-  // Unmatched local files
-  if (data.unmatched_local_files && data.unmatched_local_files.length > 0) {
-    h += '<div class="unmatched-section">';
-    h += '<div class="section-header">Local files not on Canvas (' + data.unmatched_local_files.length + ')</div>';
-    for (const f of data.unmatched_local_files) {
-      const safeF = esc(f.replace(/\\/g, '/'));
-      h += '<div class="unmatched-item" onclick="openFile(\'' + safeF.replace(/'/g, "\\'") + '\')">'
-        + esc(f) + '</div>';
-    }
-    h += '</div>';
-  }
 
   return h;
 }
@@ -491,7 +694,7 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .legend{display:flex;gap:16px;margin-bottom:16px;font-size:12px;color:var(--vscode-descriptionForeground)}
 .legend-item{display:flex;align-items:center;gap:4px}
 .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
-.dot.local{background:#198754}.dot.canvas-only{background:#dc3545}.dot.unpublished{background:#6c757d}
+.dot.local{background:#198754}.dot.canvas-only{background:#dc3545}.dot.not-synced{background:#0d6efd}.dot.canvas-newer{background:#ffc107}.dot.local-newer{background:#20c997}.dot.unpublished{background:#6c757d}
 .module{margin-bottom:16px;border:1px solid var(--vscode-widget-border);border-radius:6px;overflow:hidden}
 .module-header{background:var(--vscode-sideBar-background);padding:10px 14px;font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
 .module-header:hover{background:var(--vscode-list-hoverBackground)}
@@ -501,7 +704,7 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .pub-badge{font-size:10px;padding:1px 6px;border-radius:3px;font-weight:400}
 .pub-badge.published{background:rgba(25,135,84,0.15);color:#198754}
 .pub-badge.draft{background:rgba(108,117,125,0.15);color:#6c757d}
-.module-items{padding:4px 0;display:grid;grid-template-columns:22px 12px 24px 1fr 80px minmax(100px,300px) auto;align-items:center;row-gap:1px}.module-items.hidden{display:none}
+.module-items{padding:4px 0;display:grid;grid-template-columns:22px 12px 24px 1fr 80px 70px minmax(100px,280px) auto;align-items:center;row-gap:1px}.module-items.hidden{display:none}
 .item{display:contents;cursor:default;font-size:13px}
 .item>*{padding:4px 0}
 .item:hover>*{background:var(--vscode-list-hoverBackground)}
@@ -510,8 +713,10 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .item .title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-left:6px;padding-right:8px}
 .item .type-badge{font-size:10px;padding:2px 8px;border-radius:3px;background:var(--vscode-badge-background);color:var(--vscode-badge-foreground);text-align:center;width:80px;justify-self:end}
 .item .status-dot{width:8px;height:8px;border-radius:50%;justify-self:center}
-.item .status-dot.local{background:#198754}.item .status-dot.canvas-only{background:#dc3545}.item .status-dot.unpublished{opacity:0.5}
-.item .local-path{font-size:11px;color:var(--vscode-descriptionForeground);padding-left:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px;text-align:right}
+.item .status-dot.local{background:#198754}.item .status-dot.canvas-only{background:#dc3545}.item .status-dot.not-synced{background:#0d6efd}.item .status-dot.canvas-newer{background:#ffc107}.item .status-dot.local-newer{background:#20c997}.item .status-dot.unpublished{opacity:0.5}
+.type-badge.not-synced-badge{background:rgba(13,110,253,0.15);color:#6ea8fe}
+.item .updated{font-size:10px;color:var(--vscode-descriptionForeground);text-align:right;white-space:nowrap;padding-right:4px}
+.item .local-path{font-size:11px;color:var(--vscode-descriptionForeground);padding-left:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;text-align:right}
 .item .actions{display:flex;gap:4px;padding-right:10px;padding-left:6px;justify-self:end}
 .action-btn{background:none;border:1px solid var(--vscode-button-secondaryBackground, #333);color:var(--vscode-foreground);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;white-space:nowrap;display:inline-flex;align-items:center;gap:3px}
 .action-btn:hover{background:var(--vscode-button-secondaryHoverBackground, #444)}
@@ -532,7 +737,14 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .stat .num{font-weight:600;font-size:18px}
 .cb-cell{display:flex;align-items:center;justify-content:center}
 .item-cb{cursor:pointer;width:14px;height:14px;accent-color:#0d6efd}
-.module-import-btn{font-size:11px;padding:2px 8px;margin-left:8px}
+.module-action-btn{font-size:11px;padding:2px 8px;margin-left:4px}
+.new-btn{border-color:#6c757d;color:var(--vscode-foreground)}
+.new-btn:hover{background:rgba(108,117,125,0.15)}
+.new-menu{position:absolute;top:100%;right:0;z-index:50;background:var(--vscode-menu-background,var(--vscode-sideBar-background));border:1px solid var(--vscode-widget-border);border-radius:4px;padding:4px 0;min-width:160px;box-shadow:0 4px 12px rgba(0,0,0,0.3)}
+.new-menu.hidden{display:none}
+.new-menu-item{padding:6px 14px;font-size:12px;cursor:pointer;white-space:nowrap}
+.new-menu-item:hover{background:var(--vscode-list-hoverBackground)}
+.orphan-module{border-color:rgba(13,110,253,0.3)}
 .batch-bar{position:fixed;bottom:0;left:0;right:0;background:var(--vscode-sideBar-background);border-top:2px solid var(--vscode-focusBorder);padding:10px 24px;display:flex;align-items:center;gap:12px;z-index:100;font-size:13px}
 .batch-bar.hidden{display:none}
 #batch-count{font-weight:600;min-width:90px}
@@ -549,11 +761,28 @@ function openUrl(u){vscode.postMessage({type:"openUrl",url:u})}
 function doDiff(p){vscode.postMessage({type:"diff",localPath:p})}
 function doSync(p){vscode.postMessage({type:"sync",localPath:p})}
 function doImport(jsonStr){try{var d=JSON.parse(jsonStr);vscode.postMessage({type:"import",itemData:d})}catch(e){console.error(e)}}
+function toggleNewMenu(mi){
+  var menu=document.getElementById("new-menu-"+mi);
+  var wasHidden=menu.classList.contains("hidden");
+  document.querySelectorAll(".new-menu").forEach(function(m){m.classList.add("hidden");});
+  if(wasHidden)menu.classList.remove("hidden");
+}
+function doCreateItem(dir,type){
+  document.querySelectorAll(".new-menu").forEach(function(m){m.classList.add("hidden");});
+  vscode.postMessage({type:"createItem",moduleDir:dir,itemType:type});
+}
+document.addEventListener("click",function(e){
+  if(!e.target.closest(".new-dropdown")){
+    document.querySelectorAll(".new-menu").forEach(function(m){m.classList.add("hidden");});
+  }
+});
 function doImportModule(mi){
-  if(!window._moduleImportData||!window._moduleImportData[mi])return;
-  var items=JSON.parse(window._moduleImportData[mi]);
-  if(!confirm('Import '+items.length+' Canvas-only item(s) from this module?'))return;
-  vscode.postMessage({type:"importModule",items:items});
+  var el=document.querySelector('.module-import-data[data-mi="'+mi+'"]');
+  if(!el){console.error('No import data for module',mi);return;}
+  try{
+    var items=JSON.parse(el.getAttribute('data-items'));
+    vscode.postMessage({type:"importModule",items:items});
+  }catch(e){console.error('doImportModule error',e);}
 }
 function onCheckChanged(){
   var cbs=document.querySelectorAll('.item-cb:checked');

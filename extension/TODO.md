@@ -2,22 +2,12 @@
 
 ## Comment highlighting on math/KaTeX content
 
-Comments on text containing rendered math (KaTeX) are saved correctly but not highlighted in the preview. The selected text from KaTeX renders as unicode characters split across many `<span>` elements, which don't match as a single text node in the DOM walker.
+Kalle is implementing a working version of this in his quarto viewer.
 
-**Possible approaches:**
-- Match by surrounding plain-text context instead of the target text itself
-- Add `data-source-line` attributes during preprocessing and match by line number
-- Use Range API to find text across element boundaries
 
-## "Last synced" timestamp for drift detection
+## Module Structure enhancements
 
-Add a `canvas.last_synced` ISO timestamp to the YAML frontmatter of `.qmd` files after a successful sync to Canvas. Then in the Module Structure panel, compare this timestamp against the file's `mtime` to show a yellow "modified since last sync" indicator — lighter weight than running a full diff.
-
-**Changes needed:**
-- Python sync handlers: write `last_synced` into frontmatter after successful upload
-- Module Structure panel: read `last_synced` from matched local files and compare with `mtime`
-- Show a yellow dot or badge for files modified after their last sync
-
-## Synced scrolling
-
-Editor-to-preview scroll sync was removed due to poor alignment (proportional scrolling doesn't account for images/tables making the preview taller). Revisit with a heading-anchor or source-map approach.
+- **Accept Canvas changes**: When Canvas is newer, the "↓ Review" button opens the diff editor — but there's no one-click "accept Canvas version" to overwrite the local file. Could add an "Accept Canvas" button in the diff view or in the Module Structure panel.
+- **Sync status persistence**: Currently sync direction is based on comparing `updated_at` (Canvas) vs `mtime` (local). After a sync, the local mtime updates but the Canvas `updated_at` might not match exactly. Consider writing a `last_synced` timestamp to the sync map for more accurate tracking.
+- **Quiz import**: The `--import-item` flow doesn't yet handle Quiz items (classic or new). Needs question fetching and QMD generation.
+- **Module creation**: Local-only modules (orphan section) can't be synced yet because there's no corresponding Canvas module. Add a "Create Module on Canvas" action.

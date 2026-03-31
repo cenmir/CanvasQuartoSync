@@ -54,10 +54,12 @@ def _fetch_module_structure(course, content_root: str) -> dict:
     # local_files_by_module: { dir_name: [rel_path, ...] }
     # local_name_index: { normalized_module_name: { normalized_file_name: rel_path } }
     # local_title_index: { normalized_module_name: { normalized_frontmatter_title: rel_path } }
+    # local_path_to_title: { rel_path: frontmatter_title }
     import frontmatter as fm
     local_files_by_module = {}
     local_name_index = {}
     local_title_index = {}
+    local_path_to_title = {}
     for entry in sorted(os.listdir(content_root)):
         mod_dir = os.path.join(content_root, entry)
         if not os.path.isdir(mod_dir) or not is_valid_name(entry):
@@ -78,12 +80,26 @@ def _fetch_module_structure(course, content_root: str) -> dict:
                         ft = post.metadata.get('title', '')
                         if ft:
                             title_map[_normalize_name(ft)] = rel
+                            local_path_to_title[rel] = ft
                     except Exception:
                         pass
         local_files_by_module[entry] = files
         norm_mod = _normalize_name(entry)
         local_name_index[norm_mod] = name_map
         local_title_index[norm_mod] = title_map
+
+    # Batch-fetch updated_at for pages and assignments (2 API calls, not N)
+    page_updated = {}
+    for p in course.get_pages():
+        page_updated[getattr(p, 'url', '')] = getattr(p, 'updated_at', '')
+        # Also key by page_url slug
+        slug = getattr(p, 'url', '').rsplit('/', 1)[-1] if getattr(p, 'url', '') else ''
+        if slug:
+            page_updated[slug] = getattr(p, 'updated_at', '')
+
+    assignment_updated = {}
+    for a in course.get_assignments():
+        assignment_updated[a.id] = getattr(a, 'updated_at', '')
 
     modules = []
     for module in course.get_modules():
@@ -102,6 +118,16 @@ def _fetch_module_structure(course, content_root: str) -> dict:
             published = getattr(item, 'published', False)
             indent = getattr(item, 'indent', 0)
             external_url = getattr(item, 'external_url', None)
+
+            # Look up updated_at from batch-fetched data
+            updated_at = ''
+            if item_type == 'Page':
+                page_slug = getattr(item, 'page_url', '')
+                updated_at = page_updated.get(page_slug, '')
+            elif item_type == 'Assignment':
+                content_id_val = getattr(item, 'content_id', None)
+                if content_id_val:
+                    updated_at = assignment_updated.get(content_id_val, '')
 
             # Strategy 1: match via sync map (canvas ID)
             local_path = None
@@ -167,6 +193,17 @@ def _fetch_module_structure(course, content_root: str) -> dict:
 
             html_url = getattr(item, 'html_url', None) or ''
 
+            # Get local file mtime if matched
+            local_mtime = ''
+            if local_path:
+                abs_local = os.path.join(content_root, local_path.replace('/', os.sep))
+                try:
+                    from datetime import datetime, timezone
+                    mt = os.path.getmtime(abs_local)
+                    local_mtime = datetime.fromtimestamp(mt, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                except Exception:
+                    pass
+
             item_data = {
                 'title': item_title,
                 'type': item_type,
@@ -177,6 +214,8 @@ def _fetch_module_structure(course, content_root: str) -> dict:
                 'page_url': page_url,
                 'module_item_id': item_canvas_id,
                 'html_url': html_url,
+                'updated_at': updated_at,
+                'local_mtime': local_mtime,
             }
             if external_url:
                 item_data['external_url'] = external_url
@@ -189,12 +228,48 @@ def _fetch_module_structure(course, content_root: str) -> dict:
             'items': mod_items,
         })
 
-    # Also find local modules/files with no Canvas match
+    # Inject unmatched local files into their matching Canvas modules
     all_local_paths = set()
     for files in local_files_by_module.values():
         all_local_paths.update(files)
     matched_paths = {item['local_path'] for mod in modules for item in mod['items'] if item['local_path']}
     unmatched_local = sorted(all_local_paths - matched_paths)
+
+    # Build reverse lookup: normalized module name → module index
+    norm_to_mod_idx = {}
+    for idx, mod in enumerate(modules):
+        norm_to_mod_idx[_normalize_name(mod['name'])] = idx
+
+    orphan_files_by_dir = {}
+    for rel_path in unmatched_local:
+        dir_name = rel_path.split('/')[0]
+        norm_dir = _normalize_name(dir_name)
+        mod_idx = norm_to_mod_idx.get(norm_dir)
+
+        if mod_idx is not None:
+            # Get display title: prefer frontmatter title, else strip prefix/ext from filename
+            fname = rel_path.split('/')[-1]
+            display_title = local_path_to_title.get(rel_path) or re.sub(r'^\d+_', '', os.path.splitext(fname)[0]).replace('_', ' ')
+
+            modules[mod_idx]['items'].append({
+                'title': display_title,
+                'type': 'LocalOnly',
+                'published': None,
+                'indent': 0,
+                'local_path': rel_path,
+                'content_id': None,
+                'page_url': None,
+                'module_item_id': None,
+                'html_url': None,
+                'local_only': True,
+            })
+        else:
+            orphan_files_by_dir.setdefault(dir_name, []).append(rel_path)
+
+    local_only_modules = [
+        {'dir_name': d, 'files': files}
+        for d, files in sorted(orphan_files_by_dir.items())
+    ]
 
     return {
         'course_name': course.name,
@@ -208,7 +283,7 @@ def _fetch_module_structure(course, content_root: str) -> dict:
         'storage_quota_mb': getattr(course, 'storage_quota_mb', None),
         'created_at': getattr(course, 'created_at', ''),
         'modules': modules,
-        'unmatched_local_files': unmatched_local,
+        'local_only_modules': local_only_modules,
     }
 
 

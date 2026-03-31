@@ -59,7 +59,23 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   // Welcome tab on first activation (if no config.toml)
-  showWelcomeIfNeeded(context);
+  // Auto-open Module Structure if this is a configured course workspace
+  const folders = vscode.workspace.workspaceFolders;
+  if (folders) {
+    const configUri = vscode.Uri.joinPath(folders[0].uri, 'config.toml');
+    vscode.workspace.fs.stat(configUri).then(
+      () => {
+        // config.toml exists — open Module Structure as the main panel
+        openModuleStructurePanel(context.extensionPath);
+      },
+      () => {
+        // No config.toml — show welcome for first-time setup
+        showWelcomeIfNeeded(context);
+      }
+    );
+  } else {
+    showWelcomeIfNeeded(context);
+  }
 
   // Re-check status bar visibility when workspace folders change
   context.subscriptions.push(
