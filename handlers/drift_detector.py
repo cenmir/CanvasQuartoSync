@@ -104,19 +104,23 @@ def store_canvas_hash(content_root: str, file_path: str, canvas_html: str):
 
     Call this after a successful sync to record what Canvas should contain.
     """
+    from datetime import datetime, timezone
     content_hash = compute_content_hash(canvas_html)
+    now_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
-    # 1. Update hash in sync map
+    # 1. Update hash and last_synced_at in sync map
     sync_map = load_sync_map(content_root)
     rel_path = os.path.relpath(file_path, content_root).replace('\\', '/')
     entry = sync_map.get(rel_path)
 
     if isinstance(entry, dict):
         entry['canvas_hash'] = content_hash
+        entry['last_synced_at'] = now_iso
     else:
         sync_map[rel_path] = {
             'id': entry,
-            'canvas_hash': content_hash
+            'canvas_hash': content_hash,
+            'last_synced_at': now_iso,
         }
 
     save_sync_map(content_root, sync_map)

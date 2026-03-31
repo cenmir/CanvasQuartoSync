@@ -15,7 +15,7 @@ from handlers.new_quiz_handler import NewQuizHandler
 from handlers.calendar_handler import CalendarHandler
 from handlers.subheader_handler import SubHeaderHandler
 from handlers.external_link_handler import ExternalLinkHandler
-from handlers.content_utils import upload_file, prune_orphaned_assets, FOLDER_FILES, parse_module_name, load_sync_map
+from handlers.content_utils import upload_file, prune_orphaned_assets, FOLDER_FILES, parse_module_name, load_sync_map, save_sync_map
 from handlers import __version__
 from handlers.config import load_config, get_api_credentials, get_course_id
 from handlers.drift_detector import check_all_drift
@@ -29,6 +29,30 @@ def _normalize_name(name: str) -> str:
     return name
 
 
+def _backfill_last_synced(sync_map: dict, content_root: str):
+    """Backfill last_synced_at for entries that were synced before this field existed.
+
+    Sets last_synced_at to 'now' — these items were in sync before this feature
+    existed, so we treat the current state as the baseline. Any future Canvas
+    edits or local edits will then be detected correctly.
+    """
+    from datetime import datetime, timezone
+    now_iso = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    changed = False
+    for rel_path, entry in sync_map.items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get('last_synced_at'):
+            continue
+        # Only backfill entries that have been synced (have canvas_hash or id)
+        if not entry.get('canvas_hash') and not entry.get('id'):
+            continue
+        entry['last_synced_at'] = now_iso
+        changed = True
+    if changed:
+        save_sync_map(content_root, sync_map)
+
+
 def _fetch_module_structure(course, content_root: str) -> dict:
     """Fetch Canvas module structure and match against local files.
 
@@ -37,8 +61,13 @@ def _fetch_module_structure(course, content_root: str) -> dict:
     """
     sync_map = load_sync_map(content_root)
 
+    # Backfill last_synced_at for legacy entries that were synced before this field existed
+    _backfill_last_synced(sync_map, content_root)
+
     # Build reverse map: canvas_id -> local rel_path
+    # Build last_synced lookup: rel_path -> last_synced_at ISO string
     id_to_local = {}
+    path_to_last_synced = {}
     for rel_path, entry in sync_map.items():
         if isinstance(entry, dict):
             canvas_id = entry.get('id')
@@ -49,6 +78,9 @@ def _fetch_module_structure(course, content_root: str) -> dict:
                     id_to_local[int(canvas_id)] = rel_path
                 except (ValueError, TypeError):
                     pass
+            last_synced = entry.get('last_synced_at', '')
+            if last_synced:
+                path_to_last_synced[rel_path] = last_synced
 
     # Walk local module dirs to find files
     # local_files_by_module: { dir_name: [rel_path, ...] }
@@ -216,6 +248,7 @@ def _fetch_module_structure(course, content_root: str) -> dict:
                 'html_url': html_url,
                 'updated_at': updated_at,
                 'local_mtime': local_mtime,
+                'last_synced_at': path_to_last_synced.get(local_path, '') if local_path else '',
             }
             if external_url:
                 item_data['external_url'] = external_url
@@ -420,12 +453,27 @@ def main():
 
     logger.info("Target content directory: [dim]%s[/dim]", content_root)
 
-    # Force re-render: delete sync map to clear cached mtimes
+    # Force re-render: clear cached mtimes (but preserve other sync map data)
     if args.force:
-        sync_map_path = os.path.join(content_root, '.canvas_sync_map.json')
-        if os.path.exists(sync_map_path):
-            os.remove(sync_map_path)
-            logger.info("[yellow]Force mode:[/yellow] cleared sync map, all files will re-render")
+        sync_map = load_sync_map(content_root)
+        if args.only:
+            # Single-file force: only clear mtime for that file
+            only_rel = args.only.replace('\\', '/')
+            entry = sync_map.get(only_rel)
+            if isinstance(entry, dict) and 'mtime' in entry:
+                del entry['mtime']
+                save_sync_map(content_root, sync_map)
+                logger.info("[yellow]Force mode:[/yellow] cleared mtime for %s", only_rel)
+        else:
+            # Full force: clear all mtimes
+            changed = False
+            for entry in sync_map.values():
+                if isinstance(entry, dict) and 'mtime' in entry:
+                    del entry['mtime']
+                    changed = True
+            if changed:
+                save_sync_map(content_root, sync_map)
+            logger.info("[yellow]Force mode:[/yellow] cleared cached mtimes, all files will re-render")
 
     # Resolve Context
     API_URL, API_TOKEN = get_api_credentials(content_root)

@@ -28,6 +28,7 @@ interface ModuleItem {
   html_url?: string;
   updated_at?: string;
   local_mtime?: string;
+  last_synced_at?: string;
   local_only?: boolean;
 }
 
@@ -77,14 +78,10 @@ export async function openModuleStructurePanel(extensionPath: string): Promise<v
       }
     } else if (msg.type === 'refresh') {
       await refreshPanel(extensionPath);
-    } else if (msg.type === 'diff') {
-      if (ws && msg.localPath) {
-        await handleDiff(extensionPath, ws, msg.localPath);
-      }
     } else if (msg.type === 'sync') {
       if (ws && msg.localPath) {
-        const uri = vscode.Uri.file(path.join(ws, msg.localPath));
-        await vscode.commands.executeCommand('cqs.syncFile', uri);
+        await handleSync(extensionPath, ws, msg.localPath, true);
+        await refreshPanel(extensionPath);
       }
     } else if (msg.type === 'import') {
       await handleImport(extensionPath, msg.itemData);
@@ -109,13 +106,12 @@ export async function openModuleStructurePanel(extensionPath: string): Promise<v
       }
       await refreshPanel(extensionPath);
     } else if (msg.type === 'batchSync') {
-      // Sync multiple local items sequentially
+      // Sync multiple local items sequentially (no --force for batch)
       const ws = getWorkspaceRoot();
       if (ws) {
         let synced = 0;
         for (const localPath of msg.paths as string[]) {
-          const uri = vscode.Uri.file(path.join(ws, localPath));
-          await vscode.commands.executeCommand('cqs.syncFile', uri);
+          await handleSync(extensionPath, ws, localPath, false);
           synced++;
         }
         vscode.window.showInformationMessage(`Synced ${synced} item(s) to Canvas.`);
@@ -171,42 +167,57 @@ async function refreshPanel(extensionPath: string): Promise<void> {
   }
 }
 
-async function handleDiff(extensionPath: string, ws: string, localPath: string): Promise<void> {
+async function handleSync(extensionPath: string, ws: string, localPath: string, force: boolean): Promise<void> {
   const pythonPath = resolvePython();
   if (!pythonPath) return;
   const cqsRoot = resolveCqsRoot(extensionPath);
   const scriptPath = path.join(cqsRoot, 'sync_to_canvas.py');
-  const args = [scriptPath, ws, '--check-drift', '--diff-json', '--only', localPath];
+  const args = [scriptPath, ws, '--only', localPath];
+  if (force) args.push('--force');
+
+  // Close previous sync terminal
+  const TERM_NAME = 'Canvas Sync';
+  vscode.window.terminals.filter(t => t.name === TERM_NAME).forEach(t => t.dispose());
 
   setSyncing(true);
-  const result = await new Promise<string>((resolve) => {
-    let stdout = '';
-    const proc = spawn(pythonPath, args, { cwd: ws, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
-    proc.stdout?.on('data', (d: Buffer) => { stdout += d.toString(); });
-    proc.on('close', () => { setSyncing(false); resolve(stdout); });
-    proc.on('error', () => { setSyncing(false); resolve(''); });
+  await new Promise<void>((resolve) => {
+    const writeEmitter = new vscode.EventEmitter<string>();
+    const closeEmitter = new vscode.EventEmitter<number | void>();
+    const pty: vscode.Pseudoterminal = {
+      onDidWrite: writeEmitter.event,
+      onDidClose: closeEmitter.event,
+      open() {
+        writeEmitter.fire(`\x1b[1m> Syncing ${path.basename(localPath)}...\x1b[0m\r\n\r\n`);
+        const proc = spawn(pythonPath, args, { cwd: ws, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+        proc.stdout?.on('data', (d: Buffer) => {
+          for (const line of d.toString().split('\n')) {
+            if (line) writeEmitter.fire(line + '\r\n');
+          }
+        });
+        proc.stderr?.on('data', (d: Buffer) => {
+          writeEmitter.fire(`\x1b[31m${d.toString().replace(/\n/g, '\r\n')}\x1b[0m`);
+        });
+        proc.on('close', (code) => {
+          writeEmitter.fire('\r\n');
+          if (code === 0) {
+            writeEmitter.fire(`\x1b[32m✔ Sync complete.\x1b[0m\r\n`);
+          } else {
+            writeEmitter.fire(`\x1b[31m✖ Sync failed (exit ${code}).\x1b[0m\r\n`);
+          }
+          setSyncing(false);
+          resolve();
+        });
+        proc.on('error', (err) => {
+          writeEmitter.fire(`\x1b[31mError: ${err.message}\x1b[0m\r\n`);
+          setSyncing(false);
+          resolve();
+        });
+      },
+      close() {},
+    };
+    const terminal = vscode.window.createTerminal({ name: TERM_NAME, pty });
+    terminal.show(true);
   });
-
-  const jsonLine = result.split('\n').find(l => l.trim().startsWith('DRIFT_JSON:'));
-  if (!jsonLine) {
-    vscode.window.showInformationMessage('No drift detected — Canvas matches local file.');
-    return;
-  }
-
-  try {
-    const items = JSON.parse(jsonLine.trim().replace('DRIFT_JSON:', ''));
-    if (items.length === 0) {
-      vscode.window.showInformationMessage('No drift detected — Canvas matches local file.');
-      return;
-    }
-    for (const item of items) {
-      const canvasUri = vscode.Uri.file(item.canvas_qmd_path);
-      const localUri = vscode.Uri.file(item.local_path);
-      await vscode.commands.executeCommand('vscode.diff', canvasUri, localUri, 'Canvas \u2194 Local: ' + item.title);
-    }
-  } catch {
-    vscode.window.showErrorMessage('Failed to parse diff results.');
-  }
 }
 
 async function handleImport(extensionPath: string, itemData: Record<string, unknown>): Promise<void> {
@@ -516,31 +527,47 @@ function renderBody(data: StructureData): string {
       const icon = isLocalOnly ? '&#x1F4C4;' : (TYPE_ICONS[item.type] || '&#x1F4E6;');
 
       // Determine dot color based on sync state
+      // Compare Canvas updated_at and local mtime against last_synced_at
       let dotCls: string;
       if (isLocalOnly) {
         dotCls = 'not-synced';
       } else if (!hasLocal) {
         dotCls = 'canvas-only';
-      } else if (item.updated_at && item.local_mtime) {
-        const ct = new Date(item.updated_at).getTime();
-        const lt = new Date(item.local_mtime).getTime();
-        if (ct > lt + 60000) {
+      } else if (item.last_synced_at) {
+        const syncTime = new Date(item.last_synced_at).getTime();
+        const canvasTime = item.updated_at ? new Date(item.updated_at).getTime() : 0;
+        const localTime = item.local_mtime ? new Date(item.local_mtime).getTime() : 0;
+        const canvasChanged = canvasTime > syncTime + 60000;
+        const localChanged = localTime > syncTime + 60000;
+        if (canvasChanged && localChanged) {
+          dotCls = 'canvas-newer'; // both changed — flag for attention
+        } else if (canvasChanged) {
           dotCls = 'canvas-newer';
-        } else if (lt > ct + 60000) {
+        } else if (localChanged) {
           dotCls = 'local-newer';
         } else {
           dotCls = 'local';
+        }
+      } else if (item.updated_at && item.local_mtime) {
+        // No last_synced_at — fallback to direct comparison (legacy)
+        const ct = new Date(item.updated_at).getTime();
+        const lt = new Date(item.local_mtime).getTime();
+        if (Math.abs(ct - lt) < 120000) {
+          dotCls = 'local';
+        } else if (ct > lt) {
+          dotCls = 'canvas-newer';
+        } else {
+          dotCls = 'local-newer';
         }
       } else {
         dotCls = 'local';
       }
       const unpubCls = (item.published === false && !isLocalOnly) ? ' unpublished' : '';
-      const clickCls = (hasLocal || item.html_url) ? ' clickable' : '';
+      const clickCls = item.html_url ? ' clickable' : '';
       const safePath = hasLocal ? esc(item.local_path!.replace(/\\/g, '/')) : '';
+      // Title always links to Canvas
       let titleClick = '';
-      if (hasLocal) {
-        titleClick = ' onclick="openFile(\'' + safePath.replace(/'/g, "\\'") + '\')"';
-      } else if (item.html_url) {
+      if (item.html_url) {
         titleClick = ' onclick="openUrl(\'' + esc(item.html_url).replace(/'/g, "\\'") + '\')"';
       }
 
@@ -573,44 +600,20 @@ function renderBody(data: StructureData): string {
       const updatedFull = item.updated_at || '';
       h += '<span class="updated" title="' + esc(updatedFull) + '">' + updatedText + '</span>';
       const pathText = hasLocal ? esc(item.local_path!) : (item.external_url ? esc(item.external_url) : '');
-      h += '<span class="local-path" title="' + pathText + '">' + pathText + '</span>';
-
-      // Determine sync direction for items with both local and canvas
-      let syncDir: 'in-sync' | 'canvas-newer' | 'local-newer' | 'unknown' = 'unknown';
-      if (hasLocal && !isLocalOnly && item.updated_at && item.local_mtime) {
-        const canvasTime = new Date(item.updated_at).getTime();
-        const localTime = new Date(item.local_mtime).getTime();
-        const drift = 60000; // 1 minute tolerance
-        if (Math.abs(canvasTime - localTime) < drift) {
-          syncDir = 'in-sync';
-        } else if (canvasTime > localTime) {
-          syncDir = 'canvas-newer';
-        } else {
-          syncDir = 'local-newer';
-        }
+      if (hasLocal) {
+        h += '<span class="local-path clickable" title="' + pathText + '" onclick="openFile(\'' + safePath.replace(/'/g, "\\'") + '\')">' + pathText + '</span>';
+      } else {
+        h += '<span class="local-path" title="' + pathText + '">' + pathText + '</span>';
       }
 
       // Action buttons
       h += '<span class="actions">';
-      if (isLocalOnly) {
-        // Local-only: just Sync button
+      if (isLocalOnly || hasLocal) {
+        // Has local file: Sync button
         h += '<button class="action-btn sync-btn" onclick="event.stopPropagation();doSync(\''
           + safePath.replace(/'/g, "\\'") + '\')" title="Upload to Canvas">Sync &#x2191;</button>';
-      } else if (hasLocal) {
-        // Always show Diff
-        h += '<button class="action-btn diff-btn" onclick="event.stopPropagation();doDiff(\''
-          + safePath.replace(/'/g, "\\'") + '\')" title="Compare with Canvas">Diff</button>';
-        if (syncDir === 'canvas-newer') {
-          // Canvas is newer — primary action is Import (overwrite local)
-          h += '<button class="action-btn import-btn" onclick="event.stopPropagation();doDiff(\''
-            + safePath.replace(/'/g, "\\'") + '\')" title="Canvas has changes — view diff to update local">&#x2193; Review</button>';
-        } else {
-          // Local is newer or in-sync — primary action is Sync
-          h += '<button class="action-btn sync-btn" onclick="event.stopPropagation();doSync(\''
-            + safePath.replace(/'/g, "\\'") + '\')" title="Upload to Canvas">Sync &#x2191;</button>';
-        }
       } else {
-        // Canvas-only: Import
+        // Canvas-only: Import button
         const importData = esc(JSON.stringify(importDataObj));
         h += '<button class="action-btn import-btn" onclick="event.stopPropagation();doImport(\''
           + importData.replace(/'/g, '&#39;') + '\')" title="Import from Canvas">Import &#x2193;</button>';
@@ -717,6 +720,8 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .type-badge.not-synced-badge{background:rgba(13,110,253,0.15);color:#6ea8fe}
 .item .updated{font-size:10px;color:var(--vscode-descriptionForeground);text-align:right;white-space:nowrap;padding-right:4px}
 .item .local-path{font-size:11px;color:var(--vscode-descriptionForeground);padding-left:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;text-align:right}
+.item .local-path.clickable{cursor:pointer;text-decoration:underline;text-decoration-style:dotted}
+.item .local-path.clickable:hover{color:var(--vscode-textLink-foreground)}
 .item .actions{display:flex;gap:4px;padding-right:10px;padding-left:6px;justify-self:end}
 .action-btn{background:none;border:1px solid var(--vscode-button-secondaryBackground, #333);color:var(--vscode-foreground);padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;white-space:nowrap;display:inline-flex;align-items:center;gap:3px}
 .action-btn:hover{background:var(--vscode-button-secondaryHoverBackground, #444)}
@@ -724,8 +729,6 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .action-btn.import-btn:hover{background:rgba(13,110,253,0.15)}
 .action-btn.sync-btn{border-color:#198754;color:#75b798}
 .action-btn.sync-btn:hover{background:rgba(25,135,84,0.15)}
-.action-btn.diff-btn{border-color:#ffc107;color:#ffda6a}
-.action-btn.diff-btn:hover{background:rgba(255,193,7,0.15)}
 .unmatched-section{margin-top:24px;border:1px solid var(--vscode-widget-border);border-radius:6px;overflow:hidden}
 .unmatched-section .section-header{background:var(--vscode-sideBar-background);padding:10px 14px;font-weight:600;font-size:14px;color:var(--vscode-descriptionForeground)}
 .unmatched-item{padding:5px 14px 5px 20px;font-size:13px;color:var(--vscode-descriptionForeground);cursor:pointer}
@@ -758,7 +761,6 @@ function toggleModule(i){var el=document.getElementById("items-"+i),t=document.g
 function openFile(p){vscode.postMessage({type:"openFile",path:p})}
 function refresh(){vscode.postMessage({type:"refresh"})}
 function openUrl(u){vscode.postMessage({type:"openUrl",url:u})}
-function doDiff(p){vscode.postMessage({type:"diff",localPath:p})}
 function doSync(p){vscode.postMessage({type:"sync",localPath:p})}
 function doImport(jsonStr){try{var d=JSON.parse(jsonStr);vscode.postMessage({type:"import",itemData:d})}catch(e){console.error(e)}}
 function toggleNewMenu(mi){
