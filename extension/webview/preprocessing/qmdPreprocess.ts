@@ -130,10 +130,10 @@ export function preprocessQmd(content: string, bibEntries?: BibEntry[]): string 
         parsed.styles.push(`grid-template-rows:repeat(${nrow},auto)`);
         delete parsed.attrs['layout-nrow'];
       }
-      lines[i] = `<div${buildHtmlAttrs(parsed)}>`;
+      lines[i] = `<div${buildHtmlAttrs(parsed)}>\n`;
       quartoDivDepth++;
     } else if (/^:::\s*$/.test(lines[i]) && quartoDivDepth > 0) {
-      lines[i] = '</div>';
+      lines[i] = '\n</div>';
       quartoDivDepth--;
     }
   }

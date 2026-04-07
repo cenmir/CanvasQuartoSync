@@ -203,7 +203,7 @@ function getWebviewHtml(
     html = html.replace(/(href|src)="[./]*assets\//g, `$1="${distUri}/assets/`);
 
     // Add CSP meta tag
-    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; script-src ${webview.cspSource} 'unsafe-inline'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource} https: data:; frame-src https:;">`;
+    const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} https: data:; media-src ${webview.cspSource} https: blob:; script-src ${webview.cspSource} 'unsafe-inline'; style-src ${webview.cspSource} 'unsafe-inline'; font-src ${webview.cspSource} https: data:; frame-src https:;">`;
     html = html.replace('<head>', `<head>\n    ${csp}`);
 
     return html;

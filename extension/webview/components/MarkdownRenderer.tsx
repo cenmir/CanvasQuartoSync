@@ -105,6 +105,20 @@ export default function MarkdownRenderer({ content, imageMap, onCommentClick }: 
         return <img src={resolved} alt="" {...props} />;
       },
 
+      video({ src, children, ...props }: any) {
+        const resolved = src ? resolveImageSrc(src, imageMap) : undefined;
+        return (
+          <video controls {...props} src={resolved}>
+            {children}
+          </video>
+        );
+      },
+
+      source({ src, ...props }: any) {
+        const resolved = src ? resolveImageSrc(src, imageMap) : undefined;
+        return <source {...props} src={resolved} />;
+      },
+
       // Comment highlights
       mark({ className, children, ...props }: any) {
         const commentId = props['data-comment-id'];
