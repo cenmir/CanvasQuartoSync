@@ -129,6 +129,9 @@ class NewQuizHandler(BaseHandler):
                 # Sync questions
                 self._sync_questions(client, course_id, existing_id, questions_data, content_root, file_path, current_mtime, map_entry)
 
+                # Apply assignment-level settings to the backing assignment
+                self._update_backing_assignment(course, existing_id, canvas_meta)
+
             except NewQuizAPIError as e:
                 logger.exception("    New Quiz API error: %s", e)
                 return
@@ -141,6 +144,38 @@ class NewQuizHandler(BaseHandler):
                 'title': title,
                 'published': published
             }, indent=indent)
+
+    def _update_backing_assignment(self, course, assignment_id, canvas_meta):
+        """Apply assignment-level settings to the New Quiz's backing assignment.
+
+        New Quizzes are assignment-backed, so settings like omit_from_final_grade
+        and hide_in_gradebook must be set via the Assignments API, not the quiz API.
+
+        Canvas enforces constraints on hide_in_gradebook:
+        - It requires omit_from_final_grade to also be true.
+        - It requires points_possible to be 0 or unset.
+        When hide_in_gradebook is requested, we auto-enable omit_from_final_grade
+        and warn if points are set (since Canvas will reject the request).
+        """
+        assignment_settings = {}
+        if 'omit_from_final_grade' in canvas_meta:
+            assignment_settings['omit_from_final_grade'] = canvas_meta['omit_from_final_grade']
+        if canvas_meta.get('hide_in_gradebook'):
+            # Canvas requires omit_from_final_grade when hide_in_gradebook is true
+            assignment_settings['omit_from_final_grade'] = True
+            assignment_settings['hide_in_gradebook'] = True
+            if canvas_meta.get('points'):
+                logger.warning("    [yellow]hide_in_gradebook requires points to be 0 or unset.[/yellow] "
+                               "Canvas will reject the request when points_possible > 0.")
+        elif 'hide_in_gradebook' in canvas_meta:
+            assignment_settings['hide_in_gradebook'] = False
+        if assignment_settings:
+            try:
+                assignment = course.get_assignment(int(assignment_id))
+                assignment.edit(assignment=assignment_settings)
+                logger.debug("    Updated backing assignment settings: %s", list(assignment_settings.keys()))
+            except Exception as e:
+                logger.warning("    Failed to update backing assignment settings: %s", e)
 
     def _build_quiz_payload(self, title, published, canvas_meta):
         """Build the quiz-level settings payload for the New Quizzes API.
@@ -167,9 +202,6 @@ class NewQuizHandler(BaseHandler):
             quiz_payload['lock_at'] = canvas_meta['lock_at'] or ''
         if 'instructions' in canvas_meta:
             quiz_payload['instructions'] = canvas_meta['instructions']
-        if 'omit_from_final_grade' in canvas_meta:
-            quiz_payload['omit_from_final_grade'] = canvas_meta['omit_from_final_grade']
-
         # --- quiz_settings (nested) ---
         quiz_settings = {}
 

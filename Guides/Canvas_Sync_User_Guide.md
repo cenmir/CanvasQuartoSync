@@ -510,6 +510,7 @@ Both JSON and QMD quizzes can target either the **Classic** or **New** quiz engi
 | Numeric & Formula questions | Not supported | ✅ Supported (QMD only) |
 | `quiz_type` setting | ✅ (practice, graded, survey) | Not applicable |
 | `omit_from_final_grade` | Not applicable | ✅ Supported |
+| `hide_in_gradebook` | Not applicable | ✅ Supported |
 | `score_to_keep` | Not applicable | ✅ `highest`, `latest`, `average`, `first` |
 | `shuffle_questions` | Not applicable | ✅ Supported |
 | `calculator_type` | Not applicable | ✅ `none`, `basic`, `scientific` |
@@ -545,7 +546,8 @@ Settings shared by both formats and both engines (specified in `canvas` frontmat
 | `quiz_type` | String | Classic only: `practice_quiz`, `assignment`, `graded_survey`, `survey` |
 | `points` | Float | New Quizzes only: total points possible |
 | `shuffle_questions` | Boolean | New Quizzes only |
-| `omit_from_final_grade` | Boolean | New Quizzes only |
+| `omit_from_final_grade` | Boolean | New Quizzes only — do not count towards final grade |
+| `hide_in_gradebook` | Boolean | New Quizzes only — hide from gradebook (requires `omit_from_final_grade` and `points` must be 0 or unset) |
 | `score_to_keep` | String | New Quizzes only: `highest`, `latest`, `average`, `first` (default: `highest`) |
 | `cooling_period_seconds` | Integer | New Quizzes only: wait time (seconds) between attempts |
 | `calculator_type` | String | New Quizzes only: `none`, `basic`, `scientific` |

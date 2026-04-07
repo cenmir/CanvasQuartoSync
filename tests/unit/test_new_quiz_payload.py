@@ -100,9 +100,10 @@ class TestBasicSettings:
         payload = handler._build_quiz_payload("Q", False, {'instructions': 'Read carefully'})
         assert payload['instructions'] == 'Read carefully'
 
-    def test_omit_from_final_grade(self):
+    def test_omit_from_final_grade_not_in_quiz_payload(self):
+        """omit_from_final_grade is an assignment-level setting, not a quiz setting."""
         payload = handler._build_quiz_payload("Q", False, {'omit_from_final_grade': True})
-        assert payload['omit_from_final_grade'] is True
+        assert 'omit_from_final_grade' not in payload
 
 
 # ---------------------------------------------------------------------------
@@ -304,3 +305,88 @@ class TestResultViewSettings:
         """result_view: true (invalid) → gracefully ignored, no crash."""
         payload = handler._build_quiz_payload("Q", False, {'result_view': True})
         assert 'result_view_settings' not in _qs(payload)
+
+
+# ---------------------------------------------------------------------------
+# Backing assignment settings (_update_backing_assignment)
+# ---------------------------------------------------------------------------
+
+class TestBackingAssignmentSettings:
+
+    def test_omit_from_final_grade(self):
+        """omit_from_final_grade is applied to the backing assignment."""
+        from unittest.mock import MagicMock
+        mock_course = MagicMock()
+        mock_assignment = MagicMock()
+        mock_course.get_assignment.return_value = mock_assignment
+
+        handler._update_backing_assignment(mock_course, '123', {'omit_from_final_grade': True})
+
+        mock_course.get_assignment.assert_called_once_with(123)
+        mock_assignment.edit.assert_called_once_with(assignment={'omit_from_final_grade': True})
+
+    def test_hide_in_gradebook_auto_enables_omit(self):
+        """hide_in_gradebook: true auto-enables omit_from_final_grade."""
+        from unittest.mock import MagicMock
+        mock_course = MagicMock()
+        mock_assignment = MagicMock()
+        mock_course.get_assignment.return_value = mock_assignment
+
+        handler._update_backing_assignment(mock_course, '456', {'hide_in_gradebook': True})
+
+        mock_course.get_assignment.assert_called_once_with(456)
+        mock_assignment.edit.assert_called_once_with(assignment={
+            'omit_from_final_grade': True,
+            'hide_in_gradebook': True,
+        })
+
+    def test_hide_in_gradebook_false_sent(self):
+        """hide_in_gradebook: false is explicitly sent."""
+        from unittest.mock import MagicMock
+        mock_course = MagicMock()
+        mock_assignment = MagicMock()
+        mock_course.get_assignment.return_value = mock_assignment
+
+        handler._update_backing_assignment(mock_course, '456', {'hide_in_gradebook': False})
+
+        mock_assignment.edit.assert_called_once_with(assignment={'hide_in_gradebook': False})
+
+    def test_both_settings_combined(self):
+        """Both settings sent in a single edit call."""
+        from unittest.mock import MagicMock
+        mock_course = MagicMock()
+        mock_assignment = MagicMock()
+        mock_course.get_assignment.return_value = mock_assignment
+
+        handler._update_backing_assignment(mock_course, '789', {
+            'omit_from_final_grade': True,
+            'hide_in_gradebook': True,
+        })
+
+        mock_assignment.edit.assert_called_once_with(assignment={
+            'omit_from_final_grade': True,
+            'hide_in_gradebook': True,
+        })
+
+    def test_no_assignment_settings_skips_api_call(self):
+        """When neither setting is specified, no API call is made."""
+        from unittest.mock import MagicMock
+        mock_course = MagicMock()
+
+        handler._update_backing_assignment(mock_course, '123', {'points': 10})
+
+        mock_course.get_assignment.assert_not_called()
+
+    def test_unrelated_meta_ignored(self):
+        """Only assignment-level keys are picked up; quiz keys are ignored."""
+        from unittest.mock import MagicMock
+        mock_course = MagicMock()
+        mock_assignment = MagicMock()
+        mock_course.get_assignment.return_value = mock_assignment
+
+        handler._update_backing_assignment(mock_course, '123', {
+            'shuffle_answers': True,
+            'omit_from_final_grade': False,
+        })
+
+        mock_assignment.edit.assert_called_once_with(assignment={'omit_from_final_grade': False})
