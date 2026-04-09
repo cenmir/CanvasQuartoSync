@@ -94,41 +94,8 @@ class NewQuizHandler(BaseHandler):
                 quiz_obj = None
                 needs_update = True
 
-        # Build quiz payload
-        quiz_payload = {
-            'title': title,
-            'published': published,
-        }
-
-        if 'points' in canvas_meta:
-            quiz_payload['points_possible'] = canvas_meta['points']
-        if 'due_at' in canvas_meta:
-            quiz_payload['due_at'] = canvas_meta['due_at'] or ''
-        if 'unlock_at' in canvas_meta:
-            quiz_payload['unlock_at'] = canvas_meta['unlock_at'] or ''
-        if 'lock_at' in canvas_meta:
-            quiz_payload['lock_at'] = canvas_meta['lock_at'] or ''
-        if 'instructions' in canvas_meta:
-            quiz_payload['instructions'] = canvas_meta['instructions']
-        if 'omit_from_final_grade' in canvas_meta:
-            quiz_payload['omit_from_final_grade'] = canvas_meta['omit_from_final_grade']
-
-        # Quiz Settings
-        if 'shuffle_answers' in canvas_meta:
-            quiz_payload['shuffle_answers'] = canvas_meta['shuffle_answers']
-        if 'shuffle_questions' in canvas_meta:
-            quiz_payload['shuffle_questions'] = canvas_meta['shuffle_questions']
-        if 'time_limit' in canvas_meta:
-            quiz_payload['session_time_limit_in_seconds'] = canvas_meta['time_limit']
-
-        # Handle multiple attempts mapping
-        if 'allowed_attempts' in canvas_meta:
-            attempts = canvas_meta['allowed_attempts']
-            quiz_payload['multiple_attempts_enabled'] = attempts != 1
-            if attempts != 1:
-                quiz_payload['attempt_limit'] = attempts > 0
-                if attempts > 0:
-                    quiz_payload['allowed_attempts'] = attempts
+        # Build quiz payload with the user's published state directly.
+        quiz_payload = self._build_quiz_payload(title, published, canvas_meta)
 
         if needs_update:
             # Render question content through Quarto (LaTeX, markdown, images)
@@ -137,6 +104,13 @@ class NewQuizHandler(BaseHandler):
 
             try:
                 if quiz_obj:
+                    # Repair the backing assignment BEFORE updating the quiz.
+                    # Canvas validates assignment-level constraints (e.g.
+                    # hide_in_gradebook) during quiz updates — a prior failed
+                    # sync can leave the assignment in an invalid state that
+                    # blocks all subsequent quiz API calls.
+                    self._update_backing_assignment(course, existing_id, canvas_meta)
+
                     logger.info("    [yellow]Updating new quiz:[/yellow] %s", title)
                     quiz_obj = client.update_quiz(course_id, existing_id, quiz_payload)
                 else:
@@ -151,11 +125,13 @@ class NewQuizHandler(BaseHandler):
                     if stub_assignment:
                         existing_id = str(stub_assignment.id)
                         logger.info("    [yellow]Adopting existing stub:[/yellow] %s", title)
+                        self._update_backing_assignment(course, existing_id, canvas_meta)
                         quiz_obj = client.update_quiz(course_id, existing_id, quiz_payload)
                     else:
                         logger.info("    [green]Creating new quiz:[/green] %s", title)
                         quiz_obj = client.create_quiz(course_id, quiz_payload)
                         existing_id = str(quiz_obj['id'])
+                        self._update_backing_assignment(course, existing_id, canvas_meta)
 
                     map_entry = None  # Clear stale item IDs — new quiz has no items yet
 
@@ -174,6 +150,148 @@ class NewQuizHandler(BaseHandler):
                 'title': title,
                 'published': published
             }, indent=indent)
+
+    def _update_backing_assignment(self, course, assignment_id, canvas_meta):
+        """Apply assignment-level settings to the New Quiz's backing assignment.
+
+        New Quizzes are assignment-backed, so settings like omit_from_final_grade
+        and hide_in_gradebook must be set via the Assignments API, not the quiz API.
+
+        Canvas enforces constraints on hide_in_gradebook:
+        - It requires omit_from_final_grade to also be true.
+        - It requires points_possible to be 0 or unset.
+        When hide_in_gradebook is requested, we auto-enable omit_from_final_grade
+        and warn if points are set (since Canvas will reject the request).
+        """
+        assignment_settings = {}
+        # grading_type must be set on the backing assignment for autograding
+        # to work and for results to be visible. Defaults to "points" which
+        # matches what Canvas UI sets when creating a graded New Quiz.
+        grading_type = canvas_meta.get('grading_type', 'points')
+        assignment_settings['grading_type'] = grading_type
+        if 'omit_from_final_grade' in canvas_meta:
+            assignment_settings['omit_from_final_grade'] = canvas_meta['omit_from_final_grade']
+        if canvas_meta.get('hide_in_gradebook'):
+            # Canvas requires omit_from_final_grade when hide_in_gradebook is true
+            assignment_settings['omit_from_final_grade'] = True
+            assignment_settings['hide_in_gradebook'] = True
+            if canvas_meta.get('points'):
+                logger.warning("    [yellow]hide_in_gradebook requires points to be 0 or unset.[/yellow] "
+                               "Canvas will reject the request when points_possible > 0.")
+        # Note: do NOT send hide_in_gradebook: false explicitly — Canvas
+        # rejects it with "is not included in the list". Omitting the field
+        # keeps it at its current (default false) state.
+        if assignment_settings:
+            try:
+                assignment = course.get_assignment(int(assignment_id))
+                assignment.edit(assignment=assignment_settings)
+                logger.debug("    Updated backing assignment settings: %s", list(assignment_settings.keys()))
+            except Exception as e:
+                logger.warning("    Failed to update backing assignment settings: %s", e)
+
+    def _build_quiz_payload(self, title, published, canvas_meta):
+        """Build the quiz-level settings payload for the New Quizzes API.
+
+        The New Quizzes API nests display/behavior settings inside a
+        ``quiz_settings`` object, with multiple-attempt fields nested one
+        level deeper in ``quiz_settings.multiple_attempts``.  Top-level
+        fields are limited to title, published, points, dates, and
+        instructions.
+        """
+        quiz_payload = {
+            'title': title,
+            'published': published,
+        }
+
+        # --- Top-level fields ---
+        if 'points' in canvas_meta:
+            quiz_payload['points_possible'] = canvas_meta['points']
+        if 'due_at' in canvas_meta:
+            quiz_payload['due_at'] = canvas_meta['due_at'] or ''
+        if 'unlock_at' in canvas_meta:
+            quiz_payload['unlock_at'] = canvas_meta['unlock_at'] or ''
+        if 'lock_at' in canvas_meta:
+            quiz_payload['lock_at'] = canvas_meta['lock_at'] or ''
+        if 'instructions' in canvas_meta:
+            quiz_payload['instructions'] = canvas_meta['instructions']
+        # --- quiz_settings (nested) ---
+        quiz_settings = {}
+
+        if 'shuffle_answers' in canvas_meta:
+            quiz_settings['shuffle_answers'] = canvas_meta['shuffle_answers']
+        if 'shuffle_questions' in canvas_meta:
+            quiz_settings['shuffle_questions'] = canvas_meta['shuffle_questions']
+
+        # Time limit — value is in seconds for New Quizzes
+        if 'time_limit' in canvas_meta:
+            quiz_settings['has_time_limit'] = True
+            quiz_settings['session_time_limit_in_seconds'] = canvas_meta['time_limit']
+
+        # One-at-a-time and backtracking (Classic parity: same YAML keys)
+        if 'one_question_at_a_time' in canvas_meta:
+            quiz_settings['one_at_a_time_type'] = 'question' if canvas_meta['one_question_at_a_time'] else 'none'
+        if 'cant_go_back' in canvas_meta:
+            quiz_settings['allow_backtracking'] = not canvas_meta['cant_go_back']
+
+        # Access code (Classic parity: same YAML key)
+        if 'access_code' in canvas_meta:
+            quiz_settings['require_student_access_code'] = True
+            quiz_settings['student_access_code'] = canvas_meta['access_code']
+
+        # Calculator type
+        if 'calculator_type' in canvas_meta:
+            quiz_settings['calculator_type'] = canvas_meta['calculator_type']
+
+        # --- quiz_settings.multiple_attempts (nested) ---
+        multiple_attempts = {}
+
+        if 'allowed_attempts' in canvas_meta:
+            attempts = canvas_meta['allowed_attempts']
+            multiple_attempts['multiple_attempts_enabled'] = attempts != 1
+            if attempts > 1:
+                multiple_attempts['max_attempts'] = attempts
+            # Canvas requires score_to_keep when multiple attempts are enabled.
+            # Valid values (matching what Canvas GET returns): highest, latest,
+            # average, first.
+            if attempts != 1:
+                multiple_attempts['score_to_keep'] = canvas_meta.get(
+                    'score_to_keep', 'highest')
+
+        if 'cooling_period_seconds' in canvas_meta:
+            multiple_attempts['cooling_period_seconds'] = canvas_meta['cooling_period_seconds']
+
+        if multiple_attempts:
+            quiz_settings['multiple_attempts'] = multiple_attempts
+
+        # --- quiz_settings.result_view_settings (nested) ---
+        result_view_meta = canvas_meta.get('result_view', {})
+        if isinstance(result_view_meta, dict) and result_view_meta:
+            _RV_MAP = {
+                'restricted':               'result_view_restricted',
+                'show_questions':           'display_items',
+                'show_student_responses':   'display_item_response',
+                'show_responses_frequency': 'display_item_response_qualifier',
+                'show_responses_at':        'show_item_responses_at',
+                'hide_responses_at':        'hide_item_responses_at',
+                'show_correctness':         'display_item_response_correctness',
+                'show_correctness_at':      'show_item_correctness_at',
+                'hide_correctness_at':      'hide_item_correctness_at',
+                'show_correct_answers':     'display_item_correct_answer',
+                'show_feedback':            'display_item_feedback',
+                'show_points_awarded':      'display_points_awarded',
+                'show_points_possible':     'display_points_possible',
+            }
+            result_view = {}
+            for yaml_key, api_key in _RV_MAP.items():
+                if yaml_key in result_view_meta:
+                    result_view[api_key] = result_view_meta[yaml_key]
+            if result_view:
+                quiz_settings['result_view_settings'] = result_view
+
+        if quiz_settings:
+            quiz_payload['quiz_settings'] = quiz_settings
+
+        return quiz_payload
 
     def _render_qmd_questions(self, questions_data, base_path, course, content_root):
         """
@@ -420,14 +538,16 @@ class NewQuizHandler(BaseHandler):
         elif q_type == 'formula_question':
             interaction_slug = 'formula'
 
-        # Scoring algorithm per official Canvas API docs:
+        # Scoring algorithm per Canvas New Quizzes API:
         # choice / true-false -> "Equivalence"
         # multi-answer -> "AllOrNothing"
+        # numeric / formula -> "Numeric" (enables autograding)
+        # essay / file-upload -> "None" (manual grading)
         scoring_algorithm = "Equivalence"
         if interaction_slug == 'multi-answer':
             scoring_algorithm = "AllOrNothing"
         elif interaction_slug in ('numeric', 'formula'):
-            scoring_algorithm = "None"
+            scoring_algorithm = "Numeric"
 
         item_data = {
             "entry_type": "Item",
