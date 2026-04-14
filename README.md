@@ -128,12 +128,18 @@ The extension adds a full GUI on top of the Python sync tool:
 
 - **Sidebar panel**: New Project, Sync, Import, Diff, Preview
 - **Live QMD preview**: Canvas-matching styling with math, code highlighting, Mermaid diagrams, callouts
-- **Sync menu**: Sync All or Sync Current File, with Force/Calendar/Drift toggles
+- **Sync menu**: Sync All or Sync Current File, with Force/Calendar/Drift toggles and a **Cancel** button to abort mid-sync
 - **Right-click sync**: Sync a single file from editor or file explorer
 - **Inline comments**: Select text in preview to add review comments
 - **Import from Canvas**: Pull existing Canvas content into local `.qmd` files
 - **Diff with Canvas**: Check if someone edited content directly on Canvas
 - **New Project wizard**: Full-page form to scaffold a new course
+- **Module Structure panel**: Browse Canvas modules side-by-side with the local repo
+  - **Create modules** directly from the panel (Draft or Published)
+  - **Create new items** (Page, Assignment, Quiz, External URL) inside any module — auto-numbered, with auto-suffixed titles (`New Page`, `New Page 2`, …)
+  - **Publish/unpublish toggles** on every module and item
+  - **Batch delete** modules and items via per-row checkboxes with a modal confirm dialog (removes Canvas content and matched local files)
+  - **Sticky header** with quick Refresh and `+ New Module` actions
 
 ## CLI Usage
 
@@ -144,7 +150,7 @@ python sync_to_canvas.py ./MyCourse              # Sync everything
 python sync_to_canvas.py ./MyCourse --only 01_Intro/01_Welcome.qmd  # Sync one file
 python sync_to_canvas.py ./MyCourse --force       # Re-render all (ignore cache)
 python sync_to_canvas.py ./MyCourse --check-drift # Check for external edits
-python sync_to_canvas.py --sync-calendar          # Include calendar events
+python sync_to_canvas.py ./MyCourse --sync-calendar # Include calendar events
 python import_from_canvas.py ./output             # Import from Canvas
 ```
 
