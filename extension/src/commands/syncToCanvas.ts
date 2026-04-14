@@ -221,12 +221,27 @@ async function runSync(
     {
       location: vscode.ProgressLocation.Notification,
       title: progressTitle,
-      cancellable: false,
+      cancellable: true,
     },
-    (progress) => {
+    (progress, token) => {
       return new Promise<void>((resolveProgress) => {
         const writeEmitter = new vscode.EventEmitter<string>();
         const closeEmitter = new vscode.EventEmitter<number | void>();
+        let proc: ReturnType<typeof spawn> | undefined;
+
+        const killProc = () => {
+          if (proc) {
+            proc.kill();
+            proc = undefined;
+          }
+        };
+
+        token.onCancellationRequested(() => {
+          killProc();
+          writeEmitter.fire(`\x1b[33m⚠ Sync cancelled by user.\x1b[0m\r\n`);
+          setSyncing(false);
+          resolveProgress();
+        });
 
         const pty: vscode.Pseudoterminal = {
           onDidWrite: writeEmitter.event,
@@ -242,7 +257,7 @@ async function runSync(
             }
             writeEmitter.fire('\r\n');
 
-            const proc = spawn(pythonPath, args, {
+            proc = spawn(pythonPath, args, {
               cwd: workspaceRoot,
               env: { ...process.env, PYTHONIOENCODING: "utf-8" },
             });
@@ -271,9 +286,14 @@ async function runSync(
               writeEmitter.fire(`\x1b[31m${text}\x1b[0m`);
             });
 
-            proc.on('close', (code) => {
+            proc.on('close', (code, signal) => {
+              if (token.isCancellationRequested) {
+                return; // already handled above
+              }
               writeEmitter.fire('\r\n');
-              if (code === 0) {
+              if (signal) {
+                writeEmitter.fire(`\x1b[33m⚠ Sync cancelled.\x1b[0m\r\n`);
+              } else if (code === 0) {
                 writeEmitter.fire(
                   `\x1b[32m✔ ${progressTitle} — done.\x1b[0m\r\n`
                 );
@@ -302,7 +322,7 @@ async function runSync(
             });
           },
           close() {
-            // Terminal was closed by user
+            killProc();
           },
         };
 
