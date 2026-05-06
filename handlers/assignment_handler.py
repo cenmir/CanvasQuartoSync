@@ -62,6 +62,7 @@ class AssignmentHandler(BaseHandler):
         submission_types = canvas_meta.get('submission_types', ['online_upload'])
         allowed_extensions = canvas_meta.get('allowed_extensions', [])
         omit_from_final_grade = canvas_meta.get('omit_from_final_grade', False)
+        allowed_attempts = canvas_meta.get('allowed_attempts', -1)
         indent = canvas_meta.get('indent', 0)
 
         # 1b-ii. Resolve group assignment
@@ -99,7 +100,8 @@ class AssignmentHandler(BaseHandler):
                 'grading_type': grading_type,
                 'submission_types': submission_types,
                 'allowed_extensions': allowed_extensions,
-                'omit_from_final_grade': omit_from_final_grade
+                'omit_from_final_grade': omit_from_final_grade,
+                'allowed_attempts': allowed_attempts
             }
 
             if group_category_id:
