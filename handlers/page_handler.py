@@ -7,7 +7,7 @@ from canvasapi import Canvas
 from canvasapi.exceptions import BadRequest
 from handlers.base_handler import BaseHandler
 from handlers.content_utils import process_content, safe_delete_file, safe_delete_dir, get_mapped_id, save_mapped_id, parse_module_name
-from handlers.drift_detector import check_drift, store_canvas_hash
+from handlers.drift_detector import check_drift, store_canvas_hash, resolve_stored_html
 from handlers.log import logger
 
 class PageHandler(BaseHandler):
@@ -123,7 +123,9 @@ class PageHandler(BaseHandler):
             # 4c. Update Sync Map and store content hash for drift detection
             if content_root:
                 save_mapped_id(content_root, file_path, page_obj.page_id, mtime=current_mtime)
-                store_canvas_hash(content_root, file_path, html_body)
+                store_canvas_hash(content_root, file_path, resolve_stored_html(
+                    page_obj, 'body', html_body,
+                    lambda: course.get_page(page_obj.url)))
         else:
             # If we didn't need render, page_obj is already set from cache
             pass
