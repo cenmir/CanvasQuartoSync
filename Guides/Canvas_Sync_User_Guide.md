@@ -5,6 +5,7 @@
 - [1. Getting Started](#1-getting-started)
   - [Prerequisites](#prerequisites)
   - [Configuration](#configuration)
+  - [Dates and time zones](#dates-and-time-zones)
   - [Usage](#usage)
 - [2. File Organization & Naming Conventions](#2-file-organization--naming-conventions)
   - [Modules (Directories)](#modules-directories)
@@ -30,6 +31,11 @@
   - [Usage](#usage-1)
 - [7. Synchronization Strategy & Tracking](#7-synchronization-strategy--tracking)
   - [The Sync Map (.canvas_sync_map.json)](#the-sync-map-canvas_sync_mapjson)
+- [8. Authoring with an AI Assistant](#8-authoring-with-an-ai-assistant)
+  - [Setting up a content folder](#setting-up-a-content-folder)
+  - [The workflow](#the-workflow)
+  - [Checking content yourself](#checking-content-yourself)
+  - [Keeping the kit up to date](#keeping-the-kit-up-to-date)
 
 This system automates the synchronization of local course content to a Canvas course. It supports pages, assignments, quizzes, module headers, and calendar events.
 
@@ -51,6 +57,43 @@ The **Course ID** must be specified in one of two ways (in order of priority):
 1.  **Command Line Argument**: `--course-id 12345`
 2.  **File**: Create a `course_id.txt` file in your content folder containing only the numeric ID.
 
+### Dates and time zones
+
+Write the time students should see, with no `Z` and no offset:
+
+```yaml
+due_at: "2026-11-17T09:00:00"     # 09:00 course-local, whatever the season
+```
+
+Such a time is read as **course-local wall clock** and converted to the correct UTC
+instant at sync time, so daylight saving is handled for you. This is the recommended
+form: a fixed `09:00Z` displays as 11:00 local in summer but 10:00 once the clocks go
+back, so a weekly deadline silently drifts an hour mid-semester. A hardcoded `+02:00`
+is worse — it is simply wrong for the half of the year Sweden is on `+01:00`.
+
+Values that **do** carry a `Z` or an offset are passed through untouched and keep
+meaning exactly the instant they state, so existing content is unaffected.
+
+The zone is taken from `config.toml` if set, otherwise from the Canvas course's own
+timezone setting:
+
+```toml
+timezone = "Europe/Stockholm"     # optional; IANA name
+```
+
+Setting it locally is worthwhile if you want the meaning of your files pinned in the
+repo rather than depending on a Canvas setting someone could change. If both are set
+and they disagree, the sync warns: times are still stored as the correct instant, but
+Canvas *displays* them in the course's zone, so students would see a different clock
+time than your files state.
+
+`validate_content.py` warns about the two local times daylight saving makes strange —
+an hour that never happens (clocks jump forward) and one that happens twice (clocks go
+back). Both still sync; move the time by an hour if the warning matters.
+
+> On Windows the `tzdata` package is required (it is in `requirements.txt`), because
+> Windows ships no system timezone database.
+
 ### Usage
 Run the script from the root of your project:
 
@@ -60,6 +103,11 @@ python sync_to_canvas.py
 
 # Sync from a specific folder
 python sync_to_canvas.py ../MyCourseData
+
+# Sync a SINGLE asset (one page/assignment/quiz/file) instead of the whole course.
+# The item is created/updated and placed in the correct slot of its module,
+# and recorded in the sync map so a later full sync recognizes it.
+python sync_to_canvas.py --only 01_Introduction/02_Welcome.qmd
 
 # Sync including Calendar (Opt-in)
 python sync_to_canvas.py --sync-calendar
@@ -134,14 +182,29 @@ DailyWork/
       type: page
       published: true      # (optional, Default: false)
       indent: 0            # (optional, 0-5)
+      front_page: false    # (optional, Default: false) — see below
     ---
     ```
+
+*   **`front_page: true`** makes this page the course home page and switches the course
+    to display it. Only one page should set this.
+
+> [!NOTE]
+> Canvas does not allow the front page to be unpublished. If a page is the course front
+> page, `published: false` is rejected and the sync updates the title and body only,
+> leaving the published state untouched.
 
 ### Study Guides (`.qmd`)
 
 A study guide is rendered to **both** a Canvas page (HTML) and a downloadable PDF, synced from a single `.qmd` file.
 
 There are two modes: **preprocessed** (recommended) and **manual**.
+
+> [!WARNING]
+> **Filename detection.** Any `.qmd` whose filename contains `studyguide` or `kurspm`
+> (case-insensitive) is treated as a study guide **even without** `canvas.type:
+> study_guide`. Avoid those words in ordinary page filenames, or the sync will try to
+> render a PDF from them.
 
 #### Preprocessed Mode (`preprocess: true`)
 
@@ -233,17 +296,56 @@ If `preprocess` is not set to `true`, you manage dual-format content yourself us
       type: assignment
       published: true                   # (optional)
       points: 10                       # (optional)
-      due_at: 2024-10-15T23:59:00Z      # (optional, ISO 8601)
-      unlock_at: 2024-10-01T08:00:00Z   # (optional)
-      lock_at: 2024-10-20T23:59:00Z     # (optional)
+      due_at: "2024-10-15T23:59:00"     # (optional, ISO 8601 — course-local time)
+      unlock_at: "2024-10-01T08:00:00"  # (optional)
+      lock_at: "2024-10-20T23:59:00"    # (optional)
       grading_type: points              # (optional: points, percentage, pass_fail, letter_grade, gpa_scale, not_graded)
       submission_types: [online_upload] # (optional: [online_upload, online_text_entry, online_url, media_recording, student_annotation, none, external_tool])
       allowed_extensions: [py, txt]     # (optional)
       omit_from_final_grade: true       # (optional, Default: false) — do not count towards final grade
       allowed_attempts: -1              # (optional, Default: -1 = unlimited; use a positive integer for a finite cap)
+      hide_in_gradebook: true           # (optional, Default: false) — no gradebook column at all; requires points 0/unset
       indent: 1                       # (optional)
+      group_assignment: true            # (optional, Default: false) — group submission
+      group_set: "Project Groups"       # (optional) — name of an existing Canvas group set
     ---
     ```
+
+#### Keeping an Assignment Out of the Gradebook
+
+Two settings, doing different things:
+
+*   **`omit_from_final_grade: true`** — the column stays, the score doesn't count
+    towards the final grade.
+*   **`hide_in_gradebook: true`** — no column at all. Canvas is strict here: the
+    assignment must be worth **0 points** and be omitted from the final grade. The sync
+    sets `omit_from_final_grade` for you, but it cannot get around the points rule — with
+    points assigned it skips the setting, warns, and syncs the rest, leaving the
+    assignment visible.
+
+Both are source of truth: remove the key and the next sync puts things back.
+
+> [!NOTE]
+> `hide_in_gradebook` works on assignments and New Quizzes. A **classic quiz** doesn't
+> take it — its points come from its questions, so it can only be worth 0 if every
+> question is, which defeats the purpose. Use `quiz_type: practice_quiz` for a quiz that
+> shouldn't reach the gradebook at all.
+
+#### Group Assignments
+
+Set `group_assignment: true` to make an assignment a group submission. Canvas needs to
+know **which** group set to use:
+
+*   **With `group_set`**: the named group set is used. It must already exist in the
+    Canvas course — the sync does not create group sets.
+*   **Without `group_set`**: the sync **stops and prompts you** to pick one from the
+    course's existing group sets, then writes your choice back into the `.qmd`
+    frontmatter so later syncs run unattended. You can also apply that choice to all
+    remaining assignments in the same run.
+
+> [!TIP]
+> Always set `group_set` explicitly for unattended or scripted syncs — otherwise the
+> run blocks waiting for input.
 
 ### Text Headers (`.qmd`)
 *   Used to create visual separators within modules.
@@ -510,8 +612,8 @@ Both JSON and QMD quizzes can target either the **Classic** or **New** quiz engi
 | Time limit unit | **Minutes** | **Seconds** |
 | Numeric & Formula questions | Not supported | ✅ Supported (QMD only) |
 | `quiz_type` setting | ✅ (practice, graded, survey) | Not applicable |
-| `omit_from_final_grade` | Not applicable | ✅ Supported |
-| `hide_in_gradebook` | Not applicable | ✅ Supported |
+| `omit_from_final_grade` | ✅ Graded quiz types only | ✅ Supported |
+| `hide_in_gradebook` | ❌ Not offered — points come from the questions, so a real quiz can't be worth 0 | ✅ Supported |
 | `score_to_keep` | Not applicable | ✅ `highest`, `latest`, `average`, `first` |
 | `shuffle_questions` | Not applicable | ✅ Supported |
 | `calculator_type` | Not applicable | ✅ `none`, `basic`, `scientific` |
@@ -546,10 +648,11 @@ Settings shared by both formats and both engines (specified in `canvas` frontmat
 | `show_correct_answers` | Boolean | Classic only |
 | `quiz_type` | String | Classic only: `practice_quiz`, `assignment`, `graded_survey`, `survey` |
 | `points` | Float | New Quizzes only: total points possible |
+| `instructions` | String | New Quizzes only: text shown to students before the quiz starts |
 | `grading_type` | String | New Quizzes only: `points` (default), `percentage`, `pass_fail`, `letter_grade`, `gpa_scale`, `not_graded` |
 | `shuffle_questions` | Boolean | New Quizzes only |
-| `omit_from_final_grade` | Boolean | New Quizzes only — do not count towards final grade |
-| `hide_in_gradebook` | Boolean | New Quizzes only — hide from gradebook (requires `omit_from_final_grade` and `points` must be 0 or unset) |
+| `omit_from_final_grade` | Boolean | Do not count towards final grade. On Classic it needs `quiz_type: assignment` or `graded_survey` — other types never reach the gradebook |
+| `hide_in_gradebook` | Boolean | New Quizzes only — hide from gradebook (requires `omit_from_final_grade` and `points` must be 0 or unset). Not possible on Classic |
 | `score_to_keep` | String | New Quizzes only: `highest`, `latest`, `average`, `first` (default: `highest`) |
 | `cooling_period_seconds` | Integer | New Quizzes only: wait time (seconds) between attempts |
 | `calculator_type` | String | New Quizzes only: `none`, `basic`, `scientific` |
@@ -704,3 +807,94 @@ The first time a file is synced, the system records its unique **Canvas ID** and
 If you manually delete an image or file on Canvas that was previously synced, the sync tool won't re-upload it automatically because the local file's `mtime` hasn't changed.
 *   **To force a re-upload of a specific asset**: Open the `.canvas_sync_map.json` file, find the block for that specific asset (e.g., `"images/my_chart.png"`), and delete it. Then make a tiny change to the `.qmd` file linking it (like adding a space) and run the sync. The tool will upload the asset fresh.
 *   **To force a full course re-sync**: Delete the `.canvas_sync_map.json` file entirely. The tool will safely adopt existing modules, pages, assignments, and quiz questions by matching their exact titles/names. It will not create duplicates as long as you haven't renamed items locally. It will also clean up any duplicate quiz questions that share the exact same name.
+
+---
+
+## 8. Authoring with an AI Assistant
+
+You will usually write course content in a **separate folder** from this tool, with an
+AI coding assistant (Claude Code, Copilot, Cursor) open on it. A fresh assistant session
+knows nothing about CanvasQuartoSync: not the `NN_` naming rules, not the `canvas.*`
+settings, not the quiz syntax.
+
+The **authoring kit** fixes that. It installs a documentation bundle into your content
+folder so any assistant opened there starts out knowing the format — without reading
+this tool's source code.
+
+### Setting up a content folder
+
+Run the scaffolder once per course, pointing it at the content folder:
+
+```powershell
+python init_content_project.py C:\Courses\MECH201
+```
+
+It creates:
+
+```text
+MECH201/
+├── CLAUDE.md                      # Loaded automatically by Claude Code every session
+├── .claude/skills/canvas-content/ # The authoring skill + reference documentation
+├── check_content.bat / .sh        # Offline content validator
+├── update_kit.bat / .sh           # One-click kit refresh
+├── config.toml                    # Course id and metadata (edit this first)
+├── _quarto.yml                    # Quarto format config (HTML + PDF)
+├── branding.css                   # Brand colours and callout styling
+└── .gitignore
+```
+
+Add `--with-example` for a sample module to copy from.
+
+The wrappers are stamped with the **absolute path of the Python interpreter you ran the
+scaffolder with**, so the virtual environment can live anywhere and be named anything.
+If you later move the tool or the venv, re-run with `--update`.
+
+Existing content is never overwritten — running the scaffolder on a folder that already
+has content is safe.
+
+### The workflow
+
+1. Set `course_id` and `course_name` in `config.toml`.
+2. Open the content folder in your editor and start the assistant.
+3. Ask for what you want — a page, a quiz, an embedded video, a whole module. The
+   assistant writes the files, validates them, and reports back.
+4. Review the result and iterate.
+5. **You run the sync** when it's ready — `run_sync_here.bat`, or
+   `python sync_to_canvas.py <folder>`.
+
+The kit deliberately instructs the assistant **never to sync to Canvas**. Pushing to a
+live course stays a human decision, so an assistant cannot reach your students by
+accident.
+
+### Checking content yourself
+
+The validator is useful on its own, assistant or not:
+
+```powershell
+check_content.bat                                  # everything
+check_content.bat 01_Introduction\02_Welcome.qmd   # one file
+```
+
+It runs offline — no Canvas connection, no credentials, no Quarto — and reports what
+each file **will become in Canvas**, plus the mistakes that otherwise only surface after
+a sync:
+
+*   files missing the `NN_` prefix, which the sync silently ignores;
+*   misspelled settings (`publish:` instead of `published:`);
+*   invalid dates, out-of-range indents, unknown grading types;
+*   broken image and link paths;
+*   quiz problems: mixed answer styles, missing correct answers, numeric or formula
+    questions on the Classic engine, formulas that divide by zero.
+
+It exits non-zero if it found errors, so it also works in a pre-commit hook or CI.
+
+### Keeping the kit up to date
+
+The kit ships with the tool, so upgrading the tool can leave a content folder's copy
+behind. Two things keep them aligned, and neither rewrites files behind your back:
+
+*   **`update_kit.bat`** in the content folder — double-click to refresh. Your content,
+    `config.toml`, and any edits you made to `CLAUDE.md` are preserved; if `CLAUDE.md`
+    has been edited the refresh skips it and says so.
+*   **A notice on sync** — `sync_to_canvas.py` prints a one-line warning when the
+    folder's kit is older than the tool.

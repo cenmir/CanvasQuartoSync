@@ -1,0 +1,123 @@
+# Gotchas
+
+Behaviour that surprises people. Worth a look before touching published quizzes, front
+pages, or gradebook settings.
+
+## Silent failures
+
+**No `NN_` prefix means the file is invisible to the sync.** No error, no warning - the
+sync simply never looks at it. Same for a module folder without a prefix. This is the
+first thing to check when content "didn't appear in Canvas".
+
+**Misspelled settings are ignored.** `publish:` instead of `published:` doesn't fail; the
+setting just never applies. The validator catches these.
+
+**Numeric and formula questions on the Classic engine vanish.** `type: quiz` with a
+`numeric_question` syncs "successfully" and the question is silently lost. Use
+`type: new_quiz`.
+
+**Mixing answer styles drops answers.** A question containing any `::: {.answer}` block
+uses div answers, and every `- [x]` checklist answer in that question is discarded.
+
+**Untitled callouts arrive unstyled.** Give every callout a `##` heading as its first
+line - see recipes.md.
+
+## Dates and the source of truth
+
+Your files are authoritative. **Removing a date key clears that date in Canvas** rather
+than leaving the existing value. If a due date should stay, it must stay in the file.
+
+**Write local time, not a hardcoded offset.** `due_at: "2026-11-17T09:00:00"` means
+09:00 to students whatever the season. The two literal forms are traps:
+
+- `+02:00` is wrong for the half of the year Sweden is on `+01:00`, and Canvas will
+  faithfully shift the deadline by an hour.
+- A fixed `...Z` is a valid instant but not a stable clock time: `09:00Z` shows as
+  11:00 local in summer and 10:00 after the clocks change, so a weekly deadline drifts
+  mid-semester.
+
+**A bare date is midnight.** `due_at: "2026-08-17"` puts the deadline at 00:00 on the
+17th - the start of the day, not the end. Write `"2026-08-17T23:59:00"` instead.
+`check_content` warns on `due_at` and `lock_at`, but not `unlock_at`, where midnight is
+usually intended.
+
+Two local times are genuinely odd: the hour that never happens when clocks jump
+forward, and the hour that happens twice when they go back. Move the time by an hour
+rather than leaving it. `check_content` only warns about these when `timezone` is set
+in `config.toml` - it runs offline and cannot read the course's Canvas setting.
+
+## Titles and renaming
+
+- Renaming a *file* is safe: the sync tracks Canvas IDs in `.canvas_sync_map.json`, so
+  the existing Canvas item is updated rather than duplicated.
+- Changing a `title:` is also safe - it renames the existing item.
+- **Never delete `.canvas_sync_map.json`.** Without it the tool falls back to matching by
+  title, and anything renamed since the last sync becomes a duplicate in Canvas.
+- Quiz **question** names are matched the same way. Renaming a question makes the old one
+  get deleted and a new one created, which discards its statistics.
+
+## Quizzes with student submissions
+
+Canvas refuses to unpublish a Classic quiz once students have submitted. The sync updates
+the questions in place, but Canvas won't regenerate its internal snapshot, so it shows a
+**"Save It Now"** banner that the developer must click by hand. Nothing to fix in the
+content - just flag it when editing a live quiz.
+
+New Quizzes don't have this problem.
+
+## Front pages can't be unpublished
+
+Once a page is the course front page, Canvas rejects any update carrying
+`published: false`. The sync detects this and syncs the content anyway, leaving the
+published state alone. Setting `published: false` on the front page simply won't take.
+
+## `hide_in_gradebook` has strict rules
+
+Canvas requires `omit_from_final_grade: true` **and** points to be 0 or unset. The sync
+sets `omit_from_final_grade` for you, but it cannot work around the points constraint:
+with points assigned it skips the setting, warns, and syncs everything else, so the item
+stays visible in the gradebook. Removing the key from a file puts the column back.
+
+On a **New Quiz**, "0 points" includes the questions - a New Quiz is worth whatever its
+items add up to, and each question defaults to **1 point** when you don't say otherwise.
+A hidden New Quiz therefore needs `points_possible="0"` on every single question, not
+just `points: 0` in the frontmatter. `check_content` catches this.
+
+Available on `assignment` and `new_quiz` only.
+
+## Classic quizzes don't take `hide_in_gradebook`
+
+Same 0-points rule as above, and a classic quiz gets its points from its questions -
+so qualifying would mean making every question worth 0, which defeats the purpose of a
+graded quiz. The key is rejected rather than silently doing nothing.
+
+Use `quiz_type: practice_quiz` instead: practice quizzes and ungraded surveys never
+reach the gradebook at all. For a graded classic quiz that shouldn't count,
+`omit_from_final_grade` keeps the column but drops it from the final grade.
+
+## New Quizzes are assignments
+
+A New Quiz appears in Canvas as an assignment, not a quiz. It shows in the assignment
+list and the gradebook accordingly. This is Canvas's design, not a bug.
+
+## Time limits use different units
+
+Classic counts **minutes**; New Quizzes counts **seconds**. `time_limit: 30` is half an
+hour on Classic and thirty seconds on New Quizzes.
+
+## Group assignments can block a sync
+
+`group_assignment: true` without a `group_set` name makes the sync stop and **prompt
+interactively** for which group set to use, then write the answer back into the file.
+Always set `group_set` explicitly to a group set that already exists in the course.
+
+## Asset cleanup deletes unreferenced files
+
+At the end of a sync, anything in `synced-images` / `synced-files` that no content
+references is deleted. Removing the last reference to an image removes it from Canvas.
+Files uploaded by hand elsewhere in the course are never touched.
+
+## Quarto renders before Canvas sees anything
+
+Content is rendered by Quarto first, and only the `<main>` body reaches Canvas - no CSS,
+no scripts. See recipes.md for what that means in practice.

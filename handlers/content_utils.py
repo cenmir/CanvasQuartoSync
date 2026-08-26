@@ -9,6 +9,13 @@ from handlers.log import logger
 # Global cache for folder names to IDs to avoid redundant API lookups
 FOLDER_CACHE = {}
 
+def is_valid_name(name):
+    """
+    Checks if the name starts with exactly two digits followed by an underscore.
+    Example: '01_Intro' -> True, 'Intro' -> False, '1_Intro' -> False
+    """
+    return bool(re.match(r'^\d{2}_', name))
+
 def parse_module_name(text):
     """
     Removes leading digits and underscore from a name (e.g. '01_Intro' -> 'Intro').
@@ -20,6 +27,87 @@ def parse_module_name(text):
     if match:
         return match.group(2)
     return text
+
+# Handlers that title from the top-level frontmatter `title:`.
+_TOP_LEVEL_TITLE_TYPES = {'page', 'assignment', 'study_guide', 'subheader', 'external_url'}
+# Quiz handlers title from `canvas.title` and ignore the top-level `title:`.
+_CANVAS_TITLE_TYPES = {'quiz', 'new_quiz'}
+
+
+def _is_structural_quiz(file_path):
+    """Mirror QuizHandler.can_handle()'s fallback scan for `:::: {.question` blocks."""
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            head = f.read(4096)
+    except Exception:
+        return False
+    return ':::: {.question' in head or '::::{.question' in head
+
+
+def expected_canvas_title(file_path):
+    """
+    Compute the Canvas module-item title a file would receive, WITHOUT rendering.
+
+    Mirrors the title rule of whichever handler would claim the file, because
+    `compute_insert_position()` matches local files to module items by title.
+    The rule is not uniform across handlers:
+
+      - quizzes (both engines) title from `canvas.title`;
+      - every other content type titles from the top-level `title:`;
+      - a file no handler claims is uploaded as a solo asset, whose module-item
+        title keeps the file extension.
+
+    Handler order matters: StudyGuideHandler runs first and also claims files
+    whose name contains 'studyguide'/'kurspm', regardless of declared type.
+
+    NOTE: this duplicates the per-handler title rules. If a handler's rule
+    changes, update this helper too — tests/unit/test_single_sync.py covers the
+    agreement between them.
+    """
+    filename = os.path.basename(file_path)
+    stem, ext = os.path.splitext(filename)
+    ext = ext.lower()
+    # A file no handler claims is uploaded as a solo asset, extension and all.
+    solo_title = parse_module_name(filename)
+
+    try:
+        if ext in ('.qmd', '.md'):
+            post = frontmatter.load(file_path)
+            canvas_meta = post.metadata.get('canvas') or {}
+            declared = canvas_meta.get('type')
+
+            name_lower = filename.lower()
+            if (declared == 'study_guide'
+                    or 'studyguide' in name_lower or 'kurspm' in name_lower):
+                return post.metadata.get('title') or parse_module_name(stem)
+
+            if declared in _CANVAS_TITLE_TYPES:
+                return canvas_meta.get('title') or parse_module_name(stem)
+
+            if declared in _TOP_LEVEL_TITLE_TYPES:
+                return post.metadata.get('title') or parse_module_name(stem)
+
+            # Classic quizzes may carry no canvas.type and are detected structurally.
+            if declared is None and _is_structural_quiz(file_path):
+                return canvas_meta.get('title') or parse_module_name(stem)
+
+            return solo_title
+
+        if ext == '.json':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                canvas_meta = data.get('canvas') or {}
+                if 'questions' in data or canvas_meta.get('quiz_engine') == 'new':
+                    return canvas_meta.get('title') or parse_module_name(stem)
+            elif isinstance(data, list) and data and 'question_name' in data[0]:
+                # Legacy list format carries no metadata, so the stem is the title.
+                return parse_module_name(stem)
+            return solo_title
+    except Exception:
+        return parse_module_name(stem)
+
+    return solo_title
 
 def clean_title(filename):
     """
@@ -161,7 +249,16 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
                 return None
             # Title can be under canvas or at root
             target_title = canvas_meta.get('title') or post.metadata.get('title') or parse_module_name(os.path.splitext(filename)[0])
-            target_type = canvas_meta.get('type', 'page') # Default to page if unspecified
+            target_type = canvas_meta.get('type')
+            if not target_type:
+                # Classic quizzes carry no `canvas.type` (they're detected
+                # structurally). Recognise them by a `quiz_type` setting or inline
+                # question blocks; otherwise default to a page.
+                body = post.content or ''
+                if 'quiz_type' in canvas_meta or re.search(r':::+\s*\{\.question', body):
+                    target_type = 'quiz'
+                else:
+                    target_type = 'page'
 
         elif ext == '.json':
             # Check if New Quiz JSON
@@ -237,8 +334,11 @@ def resolve_cross_link(course, current_file_path, link_target, base_path):
         if not target_obj:
             logger.info("    [green]Creating stub new quiz:[/green] %s", target_title)
             from handlers.new_quiz_api import NewQuizAPIClient
-            api_url = course._requester.original_url
-            api_token = course._requester._access_token
+            # New Quizzes use a separate REST API; credentials come from the
+            # environment (same as NewQuizHandler) rather than canvasapi's
+            # private requester internals.
+            api_url = os.environ.get("CANVAS_API_URL") or getattr(course._requester, "original_url", None)
+            api_token = os.environ.get("CANVAS_API_TOKEN")
             client = NewQuizAPIClient(api_url, api_token)
 
             quiz_payload = {

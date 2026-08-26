@@ -8,7 +8,9 @@ from datetime import datetime
 from canvasapi import Canvas
 from handlers.base_handler import BaseHandler
 from handlers.content_utils import process_content, safe_delete_file, safe_delete_dir, get_mapped_id, save_mapped_id, parse_module_name
+from handlers.dates import resolve_timezone, to_canvas_iso
 from handlers.drift_detector import check_drift, store_canvas_hash
+from handlers.gradebook import resolve_gradebook_settings, needs_unhide
 from handlers.log import logger
 
 class AssignmentHandler(BaseHandler):
@@ -54,10 +56,12 @@ class AssignmentHandler(BaseHandler):
         published = canvas_meta.get('published', False)
         points = canvas_meta.get('points', 0)
         # Source of Truth: Use empty string to explicitly clear dates in Canvas API
-        # (None values are ignored by the API, but '' clears the field)
-        due_at = canvas_meta.get('due_at') or ''
-        unlock_at = canvas_meta.get('unlock_at') or ''
-        lock_at = canvas_meta.get('lock_at') or ''
+        # (None values are ignored by the API, but '' clears the field). Naive
+        # times are read as course-local and converted to UTC; see handlers/dates.py.
+        tz = resolve_timezone(course, content_root)
+        due_at = to_canvas_iso(canvas_meta.get('due_at'), tz, 'due_at')
+        unlock_at = to_canvas_iso(canvas_meta.get('unlock_at'), tz, 'unlock_at')
+        lock_at = to_canvas_iso(canvas_meta.get('lock_at'), tz, 'lock_at')
         grading_type = canvas_meta.get('grading_type') or ''
         submission_types = canvas_meta.get('submission_types', ['online_upload'])
         allowed_extensions = canvas_meta.get('allowed_extensions', [])
@@ -104,6 +108,15 @@ class AssignmentHandler(BaseHandler):
                 'allowed_attempts': allowed_attempts
             }
 
+            # Gradebook visibility. The default above keeps omit_from_final_grade
+            # source-of-truth (dropping the key turns it back off); the resolver
+            # overrides it when the file asks for it, or when hide_in_gradebook
+            # forces it on. See handlers/gradebook.py for what Canvas allows.
+            # Un-hiding needs the object we're about to edit, so it is merged in
+            # at each update site below.
+            assignment_args.update(resolve_gradebook_settings(
+                canvas_meta, points, label=filename))
+
             if group_category_id:
                 assignment_args['group_category_id'] = group_category_id
 
@@ -117,6 +130,8 @@ class AssignmentHandler(BaseHandler):
 
                 logger.info("    [yellow]Updating assignment:[/yellow] %s", title)
                 logger.debug("    Matched by cached ID: %s", assign_obj.id)
+                if needs_unhide(canvas_meta, getattr(assign_obj, 'hide_in_gradebook', False)):
+                    assignment_args['hide_in_gradebook'] = False
                 assign_obj.edit(assignment=assignment_args)
             else:
                 # Double check Title Search
@@ -130,6 +145,8 @@ class AssignmentHandler(BaseHandler):
                 if existing_item:
                     logger.info("    [yellow]Updating assignment:[/yellow] %s", title)
                     logger.debug("    Matched by title search (ID: %s)", existing_item.id)
+                    if needs_unhide(canvas_meta, getattr(existing_item, 'hide_in_gradebook', False)):
+                        assignment_args['hide_in_gradebook'] = False
                     existing_item.edit(assignment=assignment_args)
                     assign_obj = existing_item
                 else:

@@ -102,7 +102,7 @@ canvas:
   type: assignment
   published: true
   points: 10
-  due_at: 2026-04-15T23:59:00Z
+  due_at: "2024-05-10T23:59:00"   # course-local time; DST handled at sync
   submission_types: [online_upload]
   allowed_extensions: [pdf]
 ---
@@ -121,6 +121,31 @@ canvas:
     filename: "KursPM.pdf"
 ---
 ```
+
+## Authoring with an AI Assistant
+
+Course content is usually written in a separate folder, with an AI assistant open on it,
+which by default knows nothing about this tool's conventions. Scaffold that folder once:
+
+```powershell
+python init_content_project.py C:\Courses\MECH201
+```
+
+This installs a Claude Code skill plus reference documentation into the folder, so a
+fresh session starts out knowing the `NN_` naming rules, the `canvas.*` frontmatter
+schema, and the quiz syntax, without reading this repository. It also drops in
+`check_content.bat`, an offline validator:
+
+```powershell
+check_content.bat 01_Introduction\02_Welcome.qmd
+```
+
+It needs no Canvas connection and reports what each file will become in Canvas, plus the
+mistakes that otherwise only surface after a sync: missing `NN_` prefixes, misspelled
+settings, broken image paths, quiz questions that will not grade.
+
+The kit instructs assistants never to sync. Pushing to a live course stays your call.
+Full details in the [User Guide](Guides/Canvas_Sync_User_Guide.md#8-authoring-with-an-ai-assistant).
 
 ## VS Code Extension Features
 
