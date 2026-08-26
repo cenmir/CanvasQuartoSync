@@ -9,7 +9,7 @@ from canvasapi import Canvas
 from handlers.base_handler import BaseHandler
 from handlers.content_utils import process_content, safe_delete_file, safe_delete_dir, get_mapped_id, save_mapped_id, parse_module_name
 from handlers.dates import resolve_timezone, to_canvas_iso
-from handlers.drift_detector import check_drift, store_canvas_hash
+from handlers.drift_detector import check_drift, store_canvas_hash, resolve_stored_html
 from handlers.gradebook import resolve_gradebook_settings, needs_unhide
 from handlers.log import logger
 
@@ -132,7 +132,7 @@ class AssignmentHandler(BaseHandler):
                 logger.debug("    Matched by cached ID: %s", assign_obj.id)
                 if needs_unhide(canvas_meta, getattr(assign_obj, 'hide_in_gradebook', False)):
                     assignment_args['hide_in_gradebook'] = False
-                assign_obj.edit(assignment=assignment_args)
+                edited_obj = assign_obj.edit(assignment=assignment_args)
             else:
                 # Double check Title Search
                 assignments = course.get_assignments(search_term=title)
@@ -147,16 +147,19 @@ class AssignmentHandler(BaseHandler):
                     logger.debug("    Matched by title search (ID: %s)", existing_item.id)
                     if needs_unhide(canvas_meta, getattr(existing_item, 'hide_in_gradebook', False)):
                         assignment_args['hide_in_gradebook'] = False
-                    existing_item.edit(assignment=assignment_args)
+                    edited_obj = existing_item.edit(assignment=assignment_args)
                     assign_obj = existing_item
                 else:
                     logger.info("    [green]Creating assignment:[/green] %s", title)
                     assign_obj = course.create_assignment(assignment=assignment_args)
+                    edited_obj = assign_obj
 
             # 4c. Update Sync Map and store content hash for drift detection
             if content_root:
                 save_mapped_id(content_root, file_path, assign_obj.id, mtime=current_mtime)
-                store_canvas_hash(content_root, file_path, html_body)
+                store_canvas_hash(content_root, file_path, resolve_stored_html(
+                    edited_obj, 'description', html_body,
+                    lambda: course.get_assignment(assign_obj.id)))
         else:
             # Render skipped, assign_obj already set
             pass

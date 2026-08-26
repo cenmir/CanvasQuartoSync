@@ -95,6 +95,41 @@ def compute_content_hash(html: str) -> str:
     return hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:16]
 
 
+def resolve_stored_html(obj, attr: str, sent_html: str, refetch=None) -> str:
+    """Return the HTML Canvas reports it *stored*, not the HTML we sent.
+
+    Canvas rewrites content on save. Observed on a real course: course-relative
+    links are absolutized, ``<tbody>`` is injected into tables, void tags are
+    normalized (``<br/>`` -> ``<br>``), and account-level theme CSS may be
+    prepended. So the body we PUT is not the body Canvas will serve back.
+
+    Hashing the sent HTML therefore stores a baseline that can never match what
+    :func:`check_drift` later fetches, and every check reports drift on content
+    nobody has touched. False positives train people to ignore the warning,
+    which is worse than having no check at all.
+
+    canvasapi copies the create/update response onto the object it returns, so
+    ``getattr(obj, attr)`` is Canvas's own stored version and costs no extra
+    request. If the response carried no body we re-fetch, and only if that also
+    fails do we fall back to the sent HTML: a slightly wrong baseline still
+    beats none.
+    """
+    html = getattr(obj, attr, None) if obj is not None else None
+    if html:
+        return html
+
+    if refetch is not None:
+        try:
+            html = getattr(refetch(), attr, None)
+            if html:
+                return html
+        except Exception as e:
+            logger.debug("    Could not re-fetch stored content for drift baseline: %s", e)
+
+    logger.debug("    Canvas returned no stored content; using sent HTML as drift baseline.")
+    return sent_html
+
+
 # ---------------------------------------------------------------------------
 # Store / check
 # ---------------------------------------------------------------------------

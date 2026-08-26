@@ -1,6 +1,11 @@
 """Tests for handlers/drift_detector.py — HTML normalization and hashing."""
 
-from handlers.drift_detector import _normalize_html, compute_content_hash, _html_to_text
+from handlers.drift_detector import (
+    _normalize_html,
+    compute_content_hash,
+    _html_to_text,
+    resolve_stored_html,
+)
 
 
 # --- _normalize_html ---
@@ -100,3 +105,76 @@ class TestHtmlToText:
         text = _html_to_text(html)
         assert "Item 1" in text
         assert "Item 2" in text
+
+
+# --- resolve_stored_html ---
+#
+# Canvas rewrites HTML on save, so the drift baseline must be what Canvas says
+# it stored, never what we sent. These cover the resolution order offline; the
+# round-trip itself is covered in tests/e2e/test_drift.py.
+
+class TestResolveStoredHtml:
+
+    class _Obj:
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    def test_prefers_the_response_body(self):
+        obj = self._Obj(body="<p>canvas version</p>")
+        assert resolve_stored_html(obj, 'body', "<p>sent</p>") == "<p>canvas version</p>"
+
+    def test_reads_the_named_attribute(self):
+        obj = self._Obj(description="<p>assignment body</p>")
+        assert resolve_stored_html(obj, 'description', "<p>sent</p>") == "<p>assignment body</p>"
+
+    def test_refetches_when_response_carried_no_body(self):
+        obj = self._Obj(body=None)
+        fresh = self._Obj(body="<p>refetched</p>")
+        assert resolve_stored_html(obj, 'body', "<p>sent</p>", lambda: fresh) == "<p>refetched</p>"
+
+    def test_refetches_when_attribute_is_absent(self):
+        obj = self._Obj()
+        fresh = self._Obj(body="<p>refetched</p>")
+        assert resolve_stored_html(obj, 'body', "<p>sent</p>", lambda: fresh) == "<p>refetched</p>"
+
+    def test_falls_back_to_sent_html_when_refetch_fails(self):
+        def boom():
+            raise RuntimeError("Canvas unreachable")
+        obj = self._Obj(body=None)
+        assert resolve_stored_html(obj, 'body', "<p>sent</p>", boom) == "<p>sent</p>"
+
+    def test_falls_back_to_sent_html_when_refetch_is_also_empty(self):
+        obj = self._Obj(body=None)
+        fresh = self._Obj(body=None)
+        assert resolve_stored_html(obj, 'body', "<p>sent</p>", lambda: fresh) == "<p>sent</p>"
+
+    def test_falls_back_to_sent_html_with_no_refetch(self):
+        obj = self._Obj(body="")
+        assert resolve_stored_html(obj, 'body', "<p>sent</p>") == "<p>sent</p>"
+
+    def test_handles_a_none_object(self):
+        assert resolve_stored_html(None, 'body', "<p>sent</p>") == "<p>sent</p>"
+
+
+# --- the normalizer does not paper over Canvas's rewrites ---
+#
+# Observed on a live course: Canvas absolutizes course-relative links, injects
+# <tbody>, and normalizes void tags. The normalizer strips volatile attributes
+# but deliberately does not try to undo these, which is exactly why the baseline
+# has to come from Canvas rather than from us.
+
+class TestCanvasRewritesAreNotNormalizedAway:
+
+    def test_absolutized_link_changes_the_hash(self):
+        sent = '<a href="/courses/74/pages/intro">x</a>'
+        stored = '<a href="https://ju.instructure.com/courses/74/pages/intro">x</a>'
+        assert compute_content_hash(sent) != compute_content_hash(stored)
+
+    def test_injected_tbody_changes_the_hash(self):
+        sent = '<table><tr><td>a</td></tr></table>'
+        stored = '<table><tbody><tr><td>a</td></tr></tbody></table>'
+        assert compute_content_hash(sent) != compute_content_hash(stored)
+
+    def test_void_tag_normalization_changes_the_hash(self):
+        assert compute_content_hash('<p>a<br/>b</p>') != compute_content_hash('<p>a<br>b</p>')
