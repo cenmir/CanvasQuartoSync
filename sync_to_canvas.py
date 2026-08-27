@@ -6,7 +6,7 @@ from handlers.log import logger, setup_logging
 from handlers.calendar_handler import CalendarHandler
 from handlers.subheader_handler import SubHeaderHandler
 from handlers.external_link_handler import ExternalLinkHandler
-from handlers.content_utils import upload_file, prune_orphaned_assets, FOLDER_FILES, parse_module_name, is_valid_name
+from handlers.content_utils import upload_file, prune_orphaned_assets, FOLDER_FILES, parse_module_name, is_valid_name, verify_sync_map_course
 from handlers.single_sync import build_handlers, find_or_create_module, sync_single_file
 from handlers import __version__
 from handlers.config import get_api_credentials, get_course_id
@@ -78,6 +78,11 @@ def main():
         logger.info("[green]Connected to course:[/green] [bold]%s[/bold] (ID: %s)", course.name, course.id)
     except Exception as e:
         logger.error("[red]Connection failed:[/red] %s", e)
+        return
+
+    # The sync map's Canvas ids only mean anything in the course they came from,
+    # so refuse before touching anything if this folder belongs to another course.
+    if not verify_sync_map_course(content_root, course_id, getattr(course, 'name', None)):
         return
 
     # Drift check mode: only check for Canvas-side modifications, then exit
