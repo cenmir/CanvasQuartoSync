@@ -520,6 +520,104 @@ def safe_delete_dir(path, retries=5, delay=0.5):
 
 # --- Sync Mapping Utilities ---
 
+# The sync map stores Canvas object ids: page_id, assignment id, file id. Those
+# numbers only mean anything inside the course they came from. Page 191522 in
+# one course is an unrelated page, or nothing at all, in another.
+#
+# The map never recorded which course it described. So nothing stopped a content
+# folder being synced to one course and then pointed at another: every lookup
+# returns an id from the first course, and the sync either edits objects in that
+# course or, where the id no longer resolves, creates duplicates alongside the
+# real ones. Neither outcome reports an error, because from the tool's point of
+# view every id resolved fine. The damage is silent and lands in a live course.
+#
+# This stopped being theoretical once authors started keeping a personal sandbox
+# course next to the course they teach, which is the normal setup as soon as more
+# than one person edits the same content.
+#
+# The id lives under a reserved top-level key, deliberately not a dict. The one
+# place that walks the map (drift_detector.check_all_drift) skips it through its
+# existing isinstance(entry, dict) guard, and every other reader looks entries up
+# by relative path, so no existing consumer sees it.
+
+MAP_COURSE_KEY = "_course_id"
+
+
+def get_map_course_id(sync_map):
+    """Return the Canvas course id a sync map was built against, or None."""
+    raw = sync_map.get(MAP_COURSE_KEY)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def sync_map_has_entries(sync_map):
+    """True if the map holds at least one real file entry."""
+    return any(key != MAP_COURSE_KEY for key in sync_map)
+
+
+def verify_sync_map_course(content_root, course_id, course_name=None):
+    """Refuse to sync when this folder's sync map belongs to a different course.
+
+    Returns True when it is safe to continue, False when the caller must stop.
+
+    Four cases:
+
+    No map, or a map with no file entries yet
+        Nothing can be wrong. Stamp the course and continue.
+
+    Entries but no stamp
+        Every map written before this check existed looks like this, so refusing
+        would wall off every current user on their first run after upgrading.
+        The current course is adopted instead, with a warning that names it. The
+        warning fires once per folder, at the only moment the author can still
+        say "that is not the course I built this in".
+
+    Stamped, and it matches
+        Continue silently.
+
+    Stamped, and it does not match
+        Stop. This is the case the function exists for.
+    """
+    try:
+        course_id = int(course_id)
+    except (TypeError, ValueError):
+        return True  # No usable id to compare against; other checks handle this.
+
+    label = f"'{course_name}' (id {course_id})" if course_name else f"id {course_id}"
+    sync_map = load_sync_map(content_root)
+    mapped = get_map_course_id(sync_map)
+
+    if mapped == course_id:
+        return True
+
+    if mapped is None:
+        if sync_map_has_entries(sync_map):
+            logger.warning(
+                "    [yellow]This sync map has no course recorded.[/yellow] Adopting %s. "
+                "If this folder was ever synced to a different course, stop now and delete "
+                "%s, or the next sync will edit the wrong course.",
+                label, get_sync_map_path(content_root),
+            )
+        sync_map[MAP_COURSE_KEY] = course_id
+        save_sync_map(content_root, sync_map)
+        return True
+
+    logger.error(
+        "    [red]Wrong course.[/red] This folder's sync map was built against course id %s, "
+        "but the target is %s. Its Canvas ids do not exist in the target course, so syncing "
+        "would edit the wrong objects or create duplicates. "
+        "Sync back to course %s, or run with --force to discard the map and start fresh "
+        "against the new course.",
+        mapped, label, mapped,
+    )
+    return False
+
+
+
 def get_sync_map_path(content_root):
     return os.path.join(content_root, ".canvas_sync_map.json")
 
