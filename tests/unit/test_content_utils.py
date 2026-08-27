@@ -7,6 +7,10 @@ from handlers.content_utils import (
     clean_title,
     load_sync_map,
     save_sync_map,
+    verify_sync_map_course,
+    get_map_course_id,
+    sync_map_has_entries,
+    MAP_COURSE_KEY,
     get_mapped_id,
     save_mapped_id,
     safe_delete_file,
@@ -163,3 +167,70 @@ class TestSafeDelete:
 
     def test_delete_nonexistent_dir_no_error(self, tmp_path):
         safe_delete_dir(str(tmp_path / "nope"))
+
+
+# --- sync map course identity ---
+#
+# Canvas ids are only meaningful inside their own course, so a map carried to a
+# different course would silently edit the wrong objects. See the comment above
+# MAP_COURSE_KEY in content_utils.py.
+
+class TestSyncMapCourseIdentity:
+
+    def test_stamps_a_fresh_folder(self, tmp_path):
+        assert verify_sync_map_course(str(tmp_path), 74) is True
+        assert get_map_course_id(load_sync_map(str(tmp_path))) == 74
+
+    def test_matching_course_passes(self, tmp_path):
+        save_sync_map(str(tmp_path), {MAP_COURSE_KEY: 74, "a.qmd": {"id": 1}})
+        assert verify_sync_map_course(str(tmp_path), 74) is True
+
+    def test_mismatched_course_is_refused(self, tmp_path):
+        save_sync_map(str(tmp_path), {MAP_COURSE_KEY: 74, "a.qmd": {"id": 1}})
+        assert verify_sync_map_course(str(tmp_path), 15406) is False
+
+    def test_refusal_does_not_rewrite_the_map(self, tmp_path):
+        """A refused sync must leave the map describing its real course."""
+        save_sync_map(str(tmp_path), {MAP_COURSE_KEY: 74, "a.qmd": {"id": 1}})
+        verify_sync_map_course(str(tmp_path), 15406)
+        assert get_map_course_id(load_sync_map(str(tmp_path))) == 74
+
+    def test_unstamped_map_with_entries_is_adopted(self, tmp_path):
+        """Every pre-existing map looks like this; refusing would wall off upgraders."""
+        save_sync_map(str(tmp_path), {"a.qmd": {"id": 1}})
+        assert verify_sync_map_course(str(tmp_path), 74) is True
+        assert get_map_course_id(load_sync_map(str(tmp_path))) == 74
+
+    def test_adoption_keeps_existing_entries(self, tmp_path):
+        save_sync_map(str(tmp_path), {"a.qmd": {"id": 1, "mtime": 2.0}})
+        verify_sync_map_course(str(tmp_path), 74)
+        assert load_sync_map(str(tmp_path))["a.qmd"] == {"id": 1, "mtime": 2.0}
+
+    def test_string_course_id_compares_equal(self, tmp_path):
+        """--course-id arrives as a string; config.toml gives an int."""
+        save_sync_map(str(tmp_path), {MAP_COURSE_KEY: 74, "a.qmd": {"id": 1}})
+        assert verify_sync_map_course(str(tmp_path), "74") is True
+        assert verify_sync_map_course(str(tmp_path), "15406") is False
+
+    def test_unusable_course_id_does_not_block(self, tmp_path):
+        """Missing-id handling belongs to the caller, not to this guard."""
+        assert verify_sync_map_course(str(tmp_path), None) is True
+
+    def test_corrupt_stamp_is_treated_as_unmarked(self, tmp_path):
+        save_sync_map(str(tmp_path), {MAP_COURSE_KEY: "not a number", "a.qmd": {"id": 1}})
+        assert verify_sync_map_course(str(tmp_path), 74) is True
+        assert get_map_course_id(load_sync_map(str(tmp_path))) == 74
+
+    def test_reserved_key_is_not_counted_as_an_entry(self, tmp_path):
+        assert sync_map_has_entries({MAP_COURSE_KEY: 74}) is False
+        assert sync_map_has_entries({MAP_COURSE_KEY: 74, "a.qmd": {"id": 1}}) is True
+
+    def test_reserved_key_is_inert_to_map_walkers(self, tmp_path):
+        """check_all_drift is the only code that iterates the map. Its existing
+        isinstance(entry, dict) guard must skip the stamp rather than treat it
+        as a file entry."""
+        verify_sync_map_course(str(tmp_path), 74)
+        sync_map = load_sync_map(str(tmp_path))
+        for rel_path, entry in sync_map.items():
+            if rel_path == MAP_COURSE_KEY:
+                assert not isinstance(entry, dict)
