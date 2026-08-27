@@ -148,3 +148,74 @@ def test_http_links_not_processed(mock_resolve, mock_upload):
     mock_upload.assert_not_called()
     mock_resolve.assert_not_called()
     assert "https://canvas.instructure.com" in result
+
+
+# --- Links carrying a #fragment ---------------------------------------------
+#
+# A link to a section of another page is ordinary course content:
+#
+#     [KursPM](../01_Kursdokumentation/03_KursPM.qmd#projektredovisning)
+#
+# Before this was handled, os.path.splitext() read the extension as
+# ".qmd#projektredovisning", which is not in content_extensions, so the link
+# never reached resolve_cross_link and the page was uploaded as a file
+# attachment instead of linked. Canvas preserves heading ids and in-page
+# anchor hrefs, verified against a live course, so the fragment is kept.
+
+@patch("handlers.content_utils.upload_file")
+@patch("handlers.content_utils.resolve_cross_link")
+def test_qmd_link_with_fragment_resolves_as_cross_link(mock_resolve, mock_upload):
+    mock_resolve.return_value = "https://canvas.com/courses/1/pages/kurspm"
+    mock_course = MagicMock()
+
+    content = "[KursPM](../01_Kursdok/03_KursPM.qmd#projektredovisning)"
+    result = process_content(content, "/base", mock_course)
+
+    mock_resolve.assert_called_once()
+    mock_upload.assert_not_called()
+    assert "https://canvas.com/courses/1/pages/kurspm#projektredovisning" in result
+
+
+@patch("handlers.content_utils.upload_file")
+@patch("handlers.content_utils.resolve_cross_link")
+def test_fragment_is_not_passed_to_the_resolver(mock_resolve, mock_upload):
+    """The resolver matches on a filename, so it must not see the fragment."""
+    mock_resolve.return_value = "https://canvas.com/courses/1/pages/kurspm"
+    mock_course = MagicMock()
+
+    process_content("[K](03_KursPM.qmd#anchor)", "/base", mock_course)
+
+    passed = mock_resolve.call_args[0]
+    assert "03_KursPM.qmd" in passed
+    assert not any("#anchor" in str(a) for a in passed)
+
+
+@patch("handlers.content_utils.upload_file")
+@patch("handlers.content_utils.resolve_cross_link")
+def test_fragment_survives_the_upload_fallback(mock_resolve, mock_upload):
+    """A PDF fragment such as #page=3 is meaningful to a viewer, so keep it."""
+    mock_resolve.return_value = None
+    mock_upload.return_value = ("https://canvas.com/files/99", 99)
+    mock_course = MagicMock()
+    mock_course._requester = MagicMock()
+    mock_course._requester.original_url = "https://canvas.com/api/v1"
+    mock_course.id = 1
+
+    result = process_content("[Syllabus](syllabus.pdf#page=3)", "/base", mock_course)
+
+    # The path handed to upload_file must not carry the fragment.
+    assert "#page=3" not in mock_upload.call_args[0][1]
+    assert result.rstrip().endswith("#page=3)")
+
+
+@patch("handlers.content_utils.upload_file")
+@patch("handlers.content_utils.resolve_cross_link")
+def test_bare_anchor_is_left_alone(mock_resolve, mock_upload):
+    """An in-page link is not a file reference and must not be touched."""
+    mock_course = MagicMock()
+    content = "[Se nedan](#projektredovisning)"
+    result = process_content(content, "/base", mock_course)
+
+    assert result.strip() == content
+    mock_resolve.assert_not_called()
+    mock_upload.assert_not_called()
