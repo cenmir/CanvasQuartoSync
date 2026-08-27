@@ -5,5 +5,8 @@ node_modules/**
 .vscode/**
 tsconfig*.json
 esbuild.mjs
-vite.config.ts
+vite.config.*
+**/*.timestamp-*.mjs
 .eslintrc*
+TODO.md
+devInstructions.md

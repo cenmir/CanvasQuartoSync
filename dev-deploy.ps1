@@ -48,7 +48,7 @@ if (Test-Path (Join-Path $EXT_DIR "dist\webview\assets")) {
     Remove-Item (Join-Path $EXT_DIR "dist\webview\assets") -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-npx @vscode/vsce package --no-dependencies -o $vsixName 2>&1
+npx @vscode/vsce package --no-dependencies -o $vsixName
 if ($LASTEXITCODE -ne 0) {
     Write-Err "VSIX build failed."
     Pop-Location
@@ -62,7 +62,7 @@ Write-Step "Installing extension..."
 
 $codeCmd = $null
 foreach ($c in @("code.cmd", "code")) {
-    try { & $c --version 2>&1 | Out-Null; if ($LASTEXITCODE -eq 0) { $codeCmd = $c; break } } catch {}
+    try { & $c --version | Out-Null; if ($LASTEXITCODE -eq 0) { $codeCmd = $c; break } } catch {}
 }
 
 if (-not $codeCmd) {
@@ -71,7 +71,7 @@ if (-not $codeCmd) {
 }
 
 $vsixPath = Join-Path $EXT_DIR $vsixName
-& $codeCmd --install-extension $vsixPath --force 2>&1
+& $codeCmd --install-extension $vsixPath --force
 if ($LASTEXITCODE -ne 0) {
     Write-Err "Extension install failed."
     exit 1
