@@ -8,7 +8,7 @@ from handlers.content_utils import (
     load_sync_map, save_sync_map, parse_module_name, safe_delete_file,
     FOLDER_FILES, ACTIVE_ASSET_IDS
 )
-from handlers.drift_detector import check_drift, store_canvas_hash
+from handlers.drift_detector import check_drift, store_canvas_hash, resolve_stored_html
 from handlers.log import logger
 
 
@@ -182,7 +182,9 @@ class StudyGuideHandler(BaseHandler):
             # 8. Update Sync Map and store content hash for drift detection
             if content_root:
                 save_mapped_id(content_root, file_path, page_obj.page_id, mtime=current_mtime)
-                store_canvas_hash(content_root, file_path, html_body)
+                store_canvas_hash(content_root, file_path, resolve_stored_html(
+                    page_obj, 'body', html_body,
+                    lambda: course.get_page(page_obj.url)))
                 if pdf_file_id:
                     sync_map = load_sync_map(content_root)
                     rel_path = os.path.relpath(file_path, content_root).replace('\\', '/')
