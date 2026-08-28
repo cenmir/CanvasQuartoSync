@@ -7,7 +7,7 @@ import { setSyncing } from '../providers/statusBar';
 
 // ── Diff with Canvas ─────────────────────────────────────────────────
 //
-// Runs sync_to_canvas.py with --check-drift --diff-json to get
+// Runs sync_to_canvas.py with --check-drift --json to get
 // structured drift results, then opens VS Code's built-in diff editor
 // for each drifted file showing Canvas (left) vs Local (right).
 
@@ -62,7 +62,7 @@ export async function diffWithCanvas(extensionPath: string): Promise<void> {
 
   const cqsRoot = resolveCqsRoot(extensionPath);
   const scriptPath = path.join(cqsRoot, 'sync_to_canvas.py');
-  const args = [scriptPath, workspaceRoot, '--check-drift', '--diff-json'];
+  const args = [scriptPath, workspaceRoot, '--check-drift', '--json'];
 
   if (picked.value !== 'all') {
     const relativePath = path.relative(workspaceRoot, picked.value);
@@ -122,23 +122,15 @@ export async function diffWithCanvas(extensionPath: string): Promise<void> {
             return;
           }
 
-          // Parse JSON from stdout
-          const jsonLine = stdout
-            .split('\n')
-            .find((l) => l.startsWith('DRIFT_JSON:'));
-
-          if (!jsonLine) {
-            vscode.window.showInformationMessage(
-              'No drift detected. Canvas content matches your local files.'
-            );
-            return;
-          }
-
+          // --check-drift --json implies --quiet upstream, so stdout is
+          // the JSON document and nothing else. No prefix to look for.
           let driftItems: DriftItem[];
           try {
-            driftItems = JSON.parse(jsonLine.replace('DRIFT_JSON:', ''));
+            driftItems = JSON.parse(stdout.trim()).drifted ?? [];
           } catch {
-            vscode.window.showErrorMessage('Failed to parse drift results.');
+            vscode.window.showErrorMessage(
+              'Failed to parse drift results: ' + stdout.trim().slice(0, 200)
+            );
             return;
           }
 

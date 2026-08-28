@@ -547,16 +547,15 @@ async function fetchStructure(
         resolve({ type: 'error', message: 'Python exit ' + code + ': ' + stderr.slice(0, 500) });
         return;
       }
-      const line = stdout.split('\n').find(l => l.trim().startsWith('MODULE_STRUCTURE_JSON:'));
-      if (!line) {
-        resolve({ type: 'error', message: (stderr || stdout).slice(0, 500) || 'No output from Python script.' });
-        return;
-      }
+      // --module-structure implies --quiet upstream, so stdout is the
+      // JSON document and nothing else. No prefix to look for.
       try {
-        const data = JSON.parse(line.trim().replace('MODULE_STRUCTURE_JSON:', ''));
-        resolve({ type: 'structure', data });
+        resolve({ type: 'structure', data: JSON.parse(stdout.trim()) });
       } catch (e) {
-        resolve({ type: 'error', message: 'JSON parse error: ' + e });
+        resolve({
+          type: 'error',
+          message: 'JSON parse error: ' + e + ' | ' + (stderr || stdout).slice(0, 500),
+        });
       }
     });
 
