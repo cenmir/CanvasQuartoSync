@@ -457,11 +457,17 @@ def _check_links(report, body, base_path):
     for label, target in _LINK_RE.findall(body):
         if not target or target.startswith(_EXTERNAL_PREFIXES):
             continue
-        abs_target = os.path.normpath(os.path.join(base_path, target))
+        # Links to a section carry a fragment: KursPM.qmd#projektredovisning.
+        # It is not part of the filename, so strip it before looking on disk.
+        # Reported errors still show the link as the author wrote it.
+        path = target.partition('#')[0]
+        if not path:
+            continue
+        abs_target = os.path.normpath(os.path.join(base_path, path))
         if not os.path.exists(abs_target):
             report.error(f"link target not found: {target}")
             continue
-        if os.path.splitext(target)[1].lower() in (".qmd", ".json"):
+        if os.path.splitext(path)[1].lower() in (".qmd", ".json"):
             _check_cross_link(report, abs_target, target)
 
 
@@ -713,7 +719,9 @@ def validate_file(file_path, content_root=None, handlers=None):
 # Walking
 # ---------------------------------------------------------------------------
 
-_IGNORED_DIRS = {".git", ".claude", "__pycache__", ".canvas_snapshots", "assets", "graphics"}
+_IGNORED_DIRS = {".git", ".claude", "__pycache__",
+                 ".canvas_snapshots", ".canvas_diff_temp",
+                 "assets", "graphics"}
 _IGNORED_FILES = {
     ".canvas_sync_map.json", "_quarto.yml", "config.toml",
     "CLAUDE.md", "README.md",          # kit / project docs, not course content
