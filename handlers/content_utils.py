@@ -439,6 +439,17 @@ def process_content(content, base_path, course, content_root=None):
         if rel_path.startswith(('http://', 'https://', 'data:', '#', 'mailto:')):
             return match.group(0)
 
+        # A cross-link may carry a fragment: KursPM.qmd#projektredovisning.
+        # Split it off before anything touches the path. Without this,
+        # os.path.splitext() below reads the extension as
+        # ".qmd#projektredovisning", which is not in content_extensions, so the
+        # link never resolves to a Canvas page and the file is uploaded as an
+        # attachment instead. The fragment is reattached to the resolved URL:
+        # Canvas keeps heading ids and in-page anchor hrefs, verified against a
+        # live course, so it still works once the page is synced.
+        rel_path, sep, frag = rel_path.partition('#')
+        fragment = sep + frag if sep else ''
+
         if os.path.isabs(rel_path):
             abs_path = rel_path
         else:
@@ -451,7 +462,7 @@ def process_content(content, base_path, course, content_root=None):
         if ext in content_extensions:
             new_url = resolve_cross_link(course, os.path.join(base_path, "current_context"), rel_path, base_path)
             if new_url is not None:
-                return f"[{link_text}]({new_url})"
+                return f"[{link_text}]({new_url}{fragment})"
             # resolve_cross_link returned None — no canvas metadata, fall through to file upload
 
         # Asset Upload (PDF, ZIP, DOCX, PY, IPYNB, QMD templates, etc)
@@ -459,8 +470,8 @@ def process_content(content, base_path, course, content_root=None):
         if file_id:
             api_url = course._requester.original_url
             preview_url = f"{api_url}/courses/{course.id}/files/{file_id}"
-            return f"[{link_text}]({preview_url})"
-        return f"[{link_text}]({new_url})"
+            return f"[{link_text}]({preview_url}{fragment})"
+        return f"[{link_text}]({new_url}{fragment})"
 
     pattern_links = r'(?<!\!)\[(.*?)\]\((.*?)\)'
     content = re.sub(pattern_links, link_replacer, content)
