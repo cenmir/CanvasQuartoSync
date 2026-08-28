@@ -592,6 +592,7 @@ def main():
     parser.add_argument("--check-drift", action="store_true", help="Check if Canvas content was modified outside sync (no sync performed).")
     parser.add_argument("--show-diff", action="store_true", help="Show full diff when using --check-drift.")
     parser.add_argument("--diff-json", action="store_true", help="Output drift results as JSON (for VS Code extension).")
+    parser.add_argument("--exit-code", action="store_true", help="With --check-drift, exit 2 when drift is found. Without it the check reports and exits 0, as git diff does.")
     parser.add_argument("--only", help="Sync only a specific file (relative path from content dir, e.g. '01_Intro/02_Welcome.qmd').")
     parser.add_argument("--module-structure", action="store_true", help="Output Canvas module structure as JSON (for VS Code extension).")
     parser.add_argument("--import-item", help="Import a single Canvas item as JSON: {\"module_dir\":...,\"item_type\":...,\"content_id\":...,\"page_url\":...,\"title\":...,\"published\":...,\"indent\":...,\"external_url\":...}")
@@ -740,7 +741,11 @@ def main():
                         else:
                             logger.warning("    %s", line)
             logger.warning("[yellow]Use import_from_canvas.py to pull changes, or --force to overwrite.[/yellow]")
-            return 1
+            # Findings are not a failure unless the caller asked for that. git
+            # diff behaves the same way: reporting is the default, --exit-code
+            # opts in. 2 rather than 1 so a caller can still tell "someone
+            # edited a page" from "the check could not run".
+            return 2 if args.exit_code else 0
         logger.info("[green]No drift detected. Canvas content matches last sync.[/green]")
         return 0
 
