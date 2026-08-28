@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import argparse
 from canvasapi import Canvas
 
@@ -9,6 +10,7 @@ from handlers.subheader_handler import SubHeaderHandler
 from handlers.external_link_handler import ExternalLinkHandler
 from handlers.content_utils import upload_file, prune_orphaned_assets, FOLDER_FILES, parse_module_name, is_valid_name, verify_sync_map_course
 from handlers.single_sync import build_handlers, find_or_create_module, sync_single_file
+from handlers.module_structure import fetch_module_structure
 from handlers import __version__
 from handlers.config import get_api_credentials, get_course_id
 from handlers.drift_detector import check_all_drift
@@ -25,6 +27,7 @@ def main():
     parser.add_argument("--show-diff", action="store_true", help="Show full diff when using --check-drift.")
     parser.add_argument("--exit-code", action="store_true", help="With --check-drift, exit 2 when drift is found. Without it the check reports and exits 0, as git diff does.")
     parser.add_argument("--only", help="Sync only a specific file (relative path from content dir, e.g. '01_Intro/02_Welcome.qmd').")
+    parser.add_argument("--module-structure", action="store_true", help="Print the Canvas module structure as JSON, reconciled with local files. Reads only, syncs nothing.")
 
     verbosity = parser.add_mutually_exclusive_group()
     verbosity.add_argument("--verbose", "-v", action="store_true", help="Show detailed debug output.")
@@ -34,7 +37,14 @@ def main():
     args = parser.parse_args()
 
     # Set up logging before anything else
-    setup_logging(verbose=args.verbose, quiet=args.quiet, log_file=args.log_file)
+    # --module-structure writes JSON to stdout, so nothing else may. The logger
+    # is a rich console on stdout, and "Connecting to Canvas..." in front of a
+    # JSON document makes it unparseable. Asking for machine output implies
+    # quiet; errors still reach the console, and the exit code carries the
+    # verdict.
+    setup_logging(verbose=args.verbose,
+                  quiet=args.quiet or args.module_structure,
+                  log_file=args.log_file)
 
     # Helper to resolve paths relative to content_path
     content_root = os.path.abspath(args.content_path)
@@ -86,6 +96,12 @@ def main():
     # so refuse before touching anything if this folder belongs to another course.
     if not verify_sync_map_course(content_root, course_id, getattr(course, 'name', None)):
         return 1
+
+    # Structure mode: report what Canvas holds and how it lines up with local
+    # files, then exit. Read-only, and JSON on stdout so a caller can parse it.
+    if args.module_structure:
+        print(json.dumps(fetch_module_structure(course, content_root), ensure_ascii=False))
+        return 0
 
     # Drift check mode: only check for Canvas-side modifications, then exit
     if args.check_drift:
