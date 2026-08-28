@@ -719,7 +719,9 @@ def validate_file(file_path, content_root=None, handlers=None):
 # Walking
 # ---------------------------------------------------------------------------
 
-_IGNORED_DIRS = {".git", ".claude", "__pycache__", ".canvas_snapshots", "assets", "graphics"}
+_IGNORED_DIRS = {".git", ".claude", "__pycache__",
+                 ".canvas_snapshots", ".canvas_diff_temp",
+                 "assets", "graphics"}
 _IGNORED_FILES = {
     ".canvas_sync_map.json", "_quarto.yml", "config.toml",
     "CLAUDE.md", "README.md",          # kit / project docs, not course content
