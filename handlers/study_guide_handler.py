@@ -48,16 +48,24 @@ class StudyGuideHandler(BaseHandler):
             if map_entry.get('mtime') == current_mtime:
                 logger.debug("    No changes detected, skipping render")
                 needs_render = False
-                try:
-                    page_obj = course.get_page(existing_id)
-                except:
-                    logger.warning("    Previously synced page not found in Canvas, re-syncing")
-                    needs_render = True
 
-                # Track cached PDF as active to prevent orphan pruning
+                # Only in the skip case: nothing re-renders, so no new PDF is
+                # uploaded and the cached one has to be marked active or the
+                # orphan pruner removes it.
                 pdf_file_id = map_entry.get('pdf_file_id')
                 if pdf_file_id:
                     ACTIVE_ASSET_IDS.add(pdf_file_id)
+
+            # Always fetch the page when we have an id, whether or not the file
+            # changed. Doing it only in the unchanged branch meant every edited
+            # file fell through to the title search below, so a rename created a
+            # duplicate and orphaned the original. Mirrors new_quiz_handler,
+            # which already did this.
+            try:
+                page_obj = course.get_page(existing_id)
+            except Exception:
+                logger.warning("    Previously synced page not found in Canvas, re-syncing")
+                needs_render = True
 
         # 2. Parse Metadata
         post = frontmatter.load(file_path)

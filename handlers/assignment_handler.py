@@ -42,11 +42,17 @@ class AssignmentHandler(BaseHandler):
             if map_entry.get('mtime') == current_mtime:
                 logger.debug("    No changes detected, skipping render")
                 needs_render = False
-                try:
-                    assign_obj = course.get_assignment(existing_id)
-                except:
-                    logger.warning("    Previously synced assignment not found in Canvas, re-syncing")
-                    needs_render = True
+
+            # Always fetch the object when we have an id, whether or not the
+            # file changed. Doing it only in the unchanged branch meant every
+            # edited file fell through to the title search below, so a rename
+            # created a duplicate and orphaned the original. Mirrors
+            # new_quiz_handler, which already did this.
+            try:
+                assign_obj = course.get_assignment(existing_id)
+            except Exception:
+                logger.warning("    Previously synced assignment not found in Canvas, re-syncing")
+                needs_render = True
 
         # 1b. Parse Metadata
         post = frontmatter.load(file_path)
