@@ -1,10 +1,14 @@
 """Tests for handlers/drift_detector.py — HTML normalization and hashing."""
 
+import json
+import os
+
 from handlers.drift_detector import (
     _normalize_html,
     compute_content_hash,
     _html_to_text,
     resolve_stored_html,
+    drift_report,
 )
 
 
@@ -178,3 +182,68 @@ class TestCanvasRewritesAreNotNormalizedAway:
 
     def test_void_tag_normalization_changes_the_hash(self):
         assert compute_content_hash('<p>a<br/>b</p>') != compute_content_hash('<p>a<br>b</p>')
+
+
+# --- drift_report -----------------------------------------------------------
+#
+# The machine-readable shape behind --check-drift --json. A GUI, a cron job or
+# CI consumes this, so the field names are a contract: renaming one breaks a
+# caller that cannot be seen from here.
+
+class TestDriftReport:
+
+    class _Course:
+        id = 74
+        name = "Training_cenmir"
+
+    ITEM = {
+        'file': '01_Intro/01_Welcome.qmd',
+        'type': 'page',
+        'title': 'Welcome',
+        'stored_hash': 'aaaa',
+        'current_hash': 'bbbb',
+        'diff': '--- last-synced\n+++ current-canvas\n-old\n+new',
+    }
+
+    def _report(self, drifted, include_diff=False, root='/course'):
+        return drift_report(self._Course(), drifted, root, include_diff)
+
+    def test_reports_the_course(self):
+        out = self._report([])
+        assert out['course_id'] == 74
+        assert out['course_name'] == "Training_cenmir"
+
+    def test_clean_course_is_an_empty_list_not_a_missing_key(self):
+        """A caller should be able to len() it without checking existence."""
+        assert self._report([])['drifted'] == []
+
+    def test_carries_the_fields_a_caller_needs(self):
+        item = self._report([self.ITEM])['drifted'][0]
+        assert item['file'] == '01_Intro/01_Welcome.qmd'
+        assert item['type'] == 'page'
+        assert item['title'] == 'Welcome'
+        assert item['stored_hash'] == 'aaaa'
+        assert item['current_hash'] == 'bbbb'
+
+    def test_local_path_is_absolute_and_native(self):
+        item = self._report([self.ITEM], root=os.path.join('/course'))['drifted'][0]
+        assert item['local_path'].endswith(
+            os.path.join('01_Intro', '01_Welcome.qmd'))
+
+    def test_diff_is_omitted_by_default(self):
+        """It can be long, so it is opt-in, as in the human report."""
+        assert 'diff' not in self._report([self.ITEM])['drifted'][0]
+
+    def test_diff_is_included_when_asked_for(self):
+        item = self._report([self.ITEM], include_diff=True)['drifted'][0]
+        assert item['diff'].startswith('--- last-synced')
+
+    def test_missing_optional_fields_do_not_raise(self):
+        """check_all_drift omits hashes on some paths; the report must not care."""
+        bare = {'file': 'a.qmd', 'type': 'page', 'title': 'A'}
+        item = self._report([bare], include_diff=True)['drifted'][0]
+        assert item['stored_hash'] == ''
+        assert item['diff'] == ''
+
+    def test_output_is_json_serialisable(self):
+        json.dumps(self._report([self.ITEM], include_diff=True))
