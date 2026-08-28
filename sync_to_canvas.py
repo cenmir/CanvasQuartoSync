@@ -13,7 +13,7 @@ from handlers.single_sync import build_handlers, find_or_create_module, sync_sin
 from handlers.module_structure import fetch_module_structure
 from handlers import __version__
 from handlers.config import get_api_credentials, get_course_id
-from handlers.drift_detector import check_all_drift
+from handlers.drift_detector import check_all_drift, drift_report
 
 
 def main():
@@ -25,6 +25,7 @@ def main():
     parser.add_argument("--force", "-f", action="store_true", help="Force re-render all files (ignore cached mtimes).")
     parser.add_argument("--check-drift", action="store_true", help="Check if Canvas content was modified outside sync (no sync performed).")
     parser.add_argument("--show-diff", action="store_true", help="Show full diff when using --check-drift.")
+    parser.add_argument("--json", action="store_true", help="With --check-drift, print the result as JSON on stdout instead of a human report.")
     parser.add_argument("--exit-code", action="store_true", help="With --check-drift, exit 2 when drift is found. Without it the check reports and exits 0, as git diff does.")
     parser.add_argument("--only", help="Sync only a specific file (relative path from content dir, e.g. '01_Intro/02_Welcome.qmd').")
     parser.add_argument("--module-structure", action="store_true", help="Print the Canvas module structure as JSON, reconciled with local files. Reads only, syncs nothing.")
@@ -37,13 +38,17 @@ def main():
     args = parser.parse_args()
 
     # Set up logging before anything else
-    # --module-structure writes JSON to stdout, so nothing else may. The logger
-    # is a rich console on stdout, and "Connecting to Canvas..." in front of a
-    # JSON document makes it unparseable. Asking for machine output implies
-    # quiet; errors still reach the console, and the exit code carries the
-    # verdict.
+    # Modes that write a JSON document to stdout. The logger is a rich console
+    # on stdout, so "Connecting to Canvas..." in front of the document makes it
+    # unparseable. Asking for machine output implies quiet; errors still reach
+    # the console and the exit code carries the verdict.
+    #
+    # Listed rather than or-ed together so adding a mode is one word here
+    # instead of an edit to an expression every new mode has to touch.
+    machine_output = any(getattr(args, flag, False)
+                         for flag in ('module_structure', 'json'))
     setup_logging(verbose=args.verbose,
-                  quiet=args.quiet or args.module_structure,
+                  quiet=args.quiet or machine_output,
                   log_file=args.log_file)
 
     # Helper to resolve paths relative to content_path
@@ -107,6 +112,16 @@ def main():
     if args.check_drift:
         logger.info("[bold cyan]Checking for Canvas-side modifications...[/bold cyan]")
         drifted = check_all_drift(course, content_root)
+
+        if args.json:
+            print(json.dumps(
+                drift_report(course, drifted, content_root, args.show_diff),
+                ensure_ascii=False))
+            # --exit-code applies here too: a caller redirecting the JSON to a
+            # file still wants the verdict in $?, and losing it would make the
+            # two flags mutually exclusive for no reason.
+            return 2 if (drifted and args.exit_code) else 0
+
         if drifted:
             logger.warning("[yellow]%d item(s) have been modified on Canvas since last sync:[/yellow]", len(drifted))
             for item in drifted:

@@ -231,6 +231,37 @@ def _compute_diff(content_root: str, file_path: str, current_html: str) -> str:
 # Batch check (all items)
 # ---------------------------------------------------------------------------
 
+def drift_report(course, drifted, content_root, include_diff=False):
+    """Shape the result of :func:`check_all_drift` for machine consumption.
+
+    Kept here rather than inline in main() so it can be tested without a
+    Canvas connection, and so sync_to_canvas.py stays thin.
+
+    The diff is opt-in because it can be long, matching the human report where
+    --show-diff controls the same thing.
+    """
+    items = []
+    for item in drifted:
+        entry = {
+            'file': item['file'],
+            'type': item['type'],
+            'title': item['title'],
+            'local_path': os.path.join(content_root,
+                                       item['file'].replace('/', os.sep)),
+            'stored_hash': item.get('stored_hash', ''),
+            'current_hash': item.get('current_hash', ''),
+        }
+        if include_diff:
+            entry['diff'] = item.get('diff', '')
+        items.append(entry)
+
+    return {
+        'course_id': course.id,
+        'course_name': course.name,
+        'drifted': items,
+    }
+
+
 def check_all_drift(course, content_root: str) -> list:
     """Check drift for all synced items.
 
