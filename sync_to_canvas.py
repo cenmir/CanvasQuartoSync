@@ -1,4 +1,5 @@
 import os
+import sys
 import argparse
 from canvasapi import Canvas
 
@@ -22,6 +23,7 @@ def main():
     parser.add_argument("--force", "-f", action="store_true", help="Force re-render all files (ignore cached mtimes).")
     parser.add_argument("--check-drift", action="store_true", help="Check if Canvas content was modified outside sync (no sync performed).")
     parser.add_argument("--show-diff", action="store_true", help="Show full diff when using --check-drift.")
+    parser.add_argument("--exit-code", action="store_true", help="With --check-drift, exit 2 when drift is found. Without it the check reports and exits 0, as git diff does.")
     parser.add_argument("--only", help="Sync only a specific file (relative path from content dir, e.g. '01_Intro/02_Welcome.qmd').")
 
     verbosity = parser.add_mutually_exclusive_group()
@@ -38,7 +40,7 @@ def main():
     content_root = os.path.abspath(args.content_path)
     if not os.path.exists(content_root):
         logger.error("[red]Content directory not found:[/red] %s", content_root)
-        return
+        return 1
 
     logger.info("Target content directory: [dim]%s[/dim]", content_root)
 
@@ -65,11 +67,11 @@ def main():
 
     if not API_URL or not API_TOKEN:
          logger.error("[red]Canvas credentials not found.[/red] Set CANVAS_API_URL / CANVAS_API_TOKEN env vars, or provide canvas_api_url / canvas_token_path in config.toml.")
-         return
+         return 1
 
     if not course_id:
         logger.error("[red]Course ID not specified.[/red] Provide it via --course-id, config.toml, or a 'course_id.txt' file in the content directory.")
-        return
+        return 1
 
     logger.info("[cyan]Connecting to Canvas...[/cyan]")
     try:
@@ -78,12 +80,12 @@ def main():
         logger.info("[green]Connected to course:[/green] [bold]%s[/bold] (ID: %s)", course.name, course.id)
     except Exception as e:
         logger.error("[red]Connection failed:[/red] %s", e)
-        return
+        return 1
 
     # The sync map's Canvas ids only mean anything in the course they came from,
     # so refuse before touching anything if this folder belongs to another course.
     if not verify_sync_map_course(content_root, course_id, getattr(course, 'name', None)):
-        return
+        return 1
 
     # Drift check mode: only check for Canvas-side modifications, then exit
     if args.check_drift:
@@ -104,9 +106,13 @@ def main():
                         else:
                             logger.warning("    %s", line)
             logger.warning("[yellow]Use import_from_canvas.py to pull changes, or --force to overwrite.[/yellow]")
-        else:
-            logger.info("[green]No drift detected. Canvas content matches last sync.[/green]")
-        return
+            # Findings are not a failure unless the caller asked for that. git
+            # diff behaves the same way: reporting is the default, --exit-code
+            # opts in. 2 rather than 1 so a caller can still tell "someone
+            # edited a page" from "the check could not run".
+            return 2 if args.exit_code else 0
+        logger.info("[green]No drift detected. Canvas content matches last sync.[/green]")
+        return 0
 
     handlers = build_handlers()
 
@@ -119,9 +125,9 @@ def main():
         result = sync_single_file(course, content_root, candidate, canvas=canvas, handlers=handlers)
         if result.success:
             logger.info("[bold green]%s[/bold green]", result.message)
-        else:
-            logger.error("[red]%s[/red]", result.message)
-        return
+            return 0
+        logger.error("[red]%s[/red]", result.message)
+        return 1
 
     # Calendar Sync (Opt-in)
     if args.sync_calendar:
@@ -256,4 +262,4 @@ def main():
     logger.info("[bold green]Sync complete.[/bold green] Processed %d modules, synced %d items.", module_count, item_count)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
