@@ -457,11 +457,17 @@ def _check_links(report, body, base_path):
     for label, target in _LINK_RE.findall(body):
         if not target or target.startswith(_EXTERNAL_PREFIXES):
             continue
-        abs_target = os.path.normpath(os.path.join(base_path, target))
+        # Links to a section carry a fragment: KursPM.qmd#projektredovisning.
+        # It is not part of the filename, so strip it before looking on disk.
+        # Reported errors still show the link as the author wrote it.
+        path = target.partition('#')[0]
+        if not path:
+            continue
+        abs_target = os.path.normpath(os.path.join(base_path, path))
         if not os.path.exists(abs_target):
             report.error(f"link target not found: {target}")
             continue
-        if os.path.splitext(target)[1].lower() in (".qmd", ".json"):
+        if os.path.splitext(path)[1].lower() in (".qmd", ".json"):
             _check_cross_link(report, abs_target, target)
 
 

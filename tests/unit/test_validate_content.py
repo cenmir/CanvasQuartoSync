@@ -430,6 +430,58 @@ class TestBareDateWarnings:
         assert "midnight" not in _messages(validate_file(path, str(tmp_path)))
 
 
+# --- Links carrying a #fragment ---------------------------------------------
+#
+# The fragment is not part of the filename, so it must come off before the
+# existence check. Without this every link to a section of another page is
+# reported as broken, and a checker that cries wolf is a checker people learn
+# to ignore.
+
+def _page(body):
+    """Minimal valid page with the given body."""
+    return PAGE_TEMPLATE.format(body=body)
+
+
+PAGE_TEMPLATE = """---
+title: "T"
+canvas:
+  type: page
+---
+
+{body}
+"""
+
+
+def test_link_with_fragment_to_existing_file_is_clean(tmp_path):
+    _write(tmp_path, "01_Mod/02_Target.qmd", _page("Target page."))
+    _write(tmp_path, "01_Mod/01_Source.qmd",
+           _page("See [KursPM](02_Target.qmd#projektredovisning)."))
+
+    reports = validate_path(str(tmp_path))
+    source = next(r for r in reports if r.path.endswith("01_Source.qmd"))
+    assert _errors(source) == ""
+
+
+def test_link_with_fragment_to_missing_file_still_errors(tmp_path):
+    _write(tmp_path, "01_Mod/01_Source.qmd",
+           _page("See [Gone](99_Missing.qmd#anchor)."))
+
+    reports = validate_path(str(tmp_path))
+    source = next(r for r in reports if r.path.endswith("01_Source.qmd"))
+    # The message shows the link as the author wrote it, fragment included,
+    # so it can be found in the file.
+    assert "99_Missing.qmd#anchor" in _errors(source)
+
+
+def test_bare_anchor_is_not_treated_as_a_file(tmp_path):
+    _write(tmp_path, "01_Mod/01_Source.qmd",
+           _page("See [below](#projektredovisning)."))
+
+    reports = validate_path(str(tmp_path))
+    source = next(r for r in reports if r.path.endswith("01_Source.qmd"))
+    assert _errors(source) == ""
+
+
 def test_drift_temp_files_are_not_validated(tmp_path):
     """--check-drift writes candidate .qmd files into .canvas_diff_temp/.
 
