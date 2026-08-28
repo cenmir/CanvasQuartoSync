@@ -65,7 +65,7 @@ CanvasQuartoSync/
 │   ├── devInstructions.md     #   Extension build/debug/test guide
 │   └── TODO.md                #   Known issues (math highlighting, scroll sync)
 ├── DEVELOPER_GUIDE.md         # This file — project overview & architecture
-├── BUGS_AND_IMPROVEMENTS.md   # Tracked bugs & improvement ideas
+├── BUGS_AND_IMPROVEMENTS.md   # Known Canvas limitations (tracking lives in GitHub issues)
 ├── LESSONS_LEARNED.md         # Canvas API gotchas, design decisions, pitfalls
 ├── README.md                  # GitHub readme
 ├── DISCLAIMER.md
@@ -319,8 +319,55 @@ and stamps machine-specific paths into the wrappers. Notes for maintainers:
 
 ---
 
+## How We Track Work
+
+**Use [GitHub issues](https://github.com/JonssonLogic/CanvasQuartoSync/issues).**
+They are the record, not a file in the repo.
+
+This used to be `BUGS_AND_IMPROVEMENTS.md`, and it stopped working once the repo
+had more than one maintainer. A shared to-do file conflicts on every merge,
+completed items accumulate as strikethrough because a file cannot close
+anything, and a pull request has no way to say which entry it addresses.
+
+| What | Where |
+|:---|:---|
+| A bug, with a reproduction | issue |
+| A feature or change someone could pick up | issue |
+| A design question needing a decision | issue, before writing code |
+| A Canvas limitation nothing can fix | `BUGS_AND_IMPROVEMENTS.md` |
+| Why a past decision was made | `LESSONS_LEARNED.md` |
+| Half-formed, not yet worth anyone else reading | your own notes |
+
+Not everything belongs in an issue. Something you are still thinking about is
+better in a scratch file than as a backlog entry nobody can act on.
+
+### Working on something
+
+- **Branch from `main`**, one concern per branch. A branch that grows past what
+  its name says should be split.
+- **Reference the issue** in the pull request body. `Fixes #12` closes it on
+  merge; plain `#12` just links.
+- **A bug fix comes with a test that fails without it.** Easiest way to be sure:
+  stash only the fix, run the test, watch it fail, unstash.
+- **Verify against a real course** when the claim is about Canvas behaviour.
+  Canvas rewrites HTML on save, and assumptions about it are usually wrong.
+- **Name the judgement call.** If a change involved a decision that could
+  reasonably have gone the other way, say so in the pull request rather than
+  deciding it silently. It is what makes a review possible.
+
+### Two kinds of change, two kinds of pull request
+
+**Bug fixes** can go straight to a pull request. The reproduction is the argument.
+
+**Anything that changes behaviour for existing users** starts as an issue.
+Defaults, file formats, exit codes, and command-line semantics all fall here.
+Agreeing the shape first is cheaper than agreeing it inside a diff.
+
+---
+
 ## Important Notes
 
+- **Work is tracked in GitHub issues**, not in a file. See *How We Track Work* above.
 - **Read `LESSONS_LEARNED.md`** for Canvas API quirks and design rationale. This file captures things a contributor still needs to be aware of (API limitations, non-obvious design choices, gotchas). Once an issue or limitation is resolved, its entry can be removed.
 - **Read `Guides/Canvas_Sync_User_Guide.md`** for the full user-facing feature documentation.
 - All dates in Canvas API use ISO 8601 format. Empty string `''` clears a date field; `None` is ignored.

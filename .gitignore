@@ -42,3 +42,11 @@ _temp_*
 Thumbs.db
 
 # Admin
+
+# Personal scratch lists. Tracking lives in GitHub issues; see DEVELOPER_GUIDE.md.
+TODO.md
+**/TODO.md
+
+# Node, for the VS Code extension
+node_modules/
+*.vsix
