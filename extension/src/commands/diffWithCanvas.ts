@@ -15,7 +15,9 @@ interface DriftItem {
   file: string;
   type: string;
   title: string;
-  canvas_qmd_path: string;
+  // Written only when the drift check built diffs. Absent is a real case, so
+  // it is optional here and checked before use.
+  canvas_qmd_path?: string;
   local_path: string;
 }
 
@@ -151,6 +153,7 @@ async function runDriftCheck(
         proc.on('close', async (code) => {
           setSyncing(false);
           resolveProgress();
+          try {
 
           if (code !== 0) {
             vscode.window.showErrorMessage(
@@ -217,6 +220,11 @@ async function runDriftCheck(
           } else {
             await openDiff(selected.item);
           }
+          } catch (e) {
+            vscode.window.showErrorMessage(
+              'Drift check failed after the run: ' + String(e)
+            );
+          }
         });
 
         proc.on('error', (err) => {
@@ -230,6 +238,17 @@ async function runDriftCheck(
 }
 
 async function openDiff(item: DriftItem): Promise<void> {
+  // Uri.file(undefined) throws, and this runs inside an async handler whose
+  // rejection goes nowhere: the user clicked Diff and watched nothing happen.
+  // Say so instead.
+  if (!item.canvas_qmd_path || !item.local_path) {
+    vscode.window.showErrorMessage(
+      `Cannot open the diff for ${item.title}: the drift check did not return `
+      + `a Canvas copy to compare against.`
+    );
+    return;
+  }
+
   const canvasUri = vscode.Uri.file(item.canvas_qmd_path);
   const localUri = vscode.Uri.file(item.local_path);
 

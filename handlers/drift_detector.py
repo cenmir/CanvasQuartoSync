@@ -317,8 +317,11 @@ def drift_report(course, drifted, content_root, include_diff=False):
     Kept here rather than inline in main() so it can be tested without a
     Canvas connection, and so sync_to_canvas.py stays thin.
 
-    The diff is opt-in because it can be long, matching the human report where
-    --show-diff controls the same thing.
+    The diff *text* is opt-in because it can be long, matching the human report
+    where --show-diff controls the same thing. ``canvas_qmd_path`` is not: it
+    is one path, and it is the only way a caller can open a diff editor on the
+    Canvas side. Leaving it out meant the extension read undefined, threw
+    inside an async handler, and showed the user nothing at all.
     """
     items = []
     for item in drifted:
@@ -331,6 +334,9 @@ def drift_report(course, drifted, content_root, include_diff=False):
             'stored_hash': item.get('stored_hash', ''),
             'current_hash': item.get('current_hash', ''),
         }
+        # Absent when the drift check ran without building diffs.
+        if item.get('canvas_qmd_path'):
+            entry['canvas_qmd_path'] = item['canvas_qmd_path']
         if include_diff:
             entry['diff'] = item.get('diff', '')
         items.append(entry)

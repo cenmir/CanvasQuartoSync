@@ -208,6 +208,27 @@ class TestDriftReport:
     def _report(self, drifted, include_diff=False, root='/course'):
         return drift_report(self._Course(), drifted, root, include_diff)
 
+    def test_carries_the_canvas_copy_so_a_diff_can_be_opened(self):
+        """Without this the extension read undefined and died silently.
+
+        Uri.file(undefined) throws inside an async handler, so the user
+        clicked Diff, watched the progress notification, and then nothing
+        happened at all. The diff *text* is opt-in because it can be long;
+        this is one path, and it is the only way to open a diff editor on the
+        Canvas side.
+        """
+        item = dict(self.ITEM, canvas_qmd_path='/tmp/canvas__01_Welcome.qmd')
+
+        out = self._report([item])
+
+        assert out['drifted'][0]['canvas_qmd_path'] == '/tmp/canvas__01_Welcome.qmd'
+
+    def test_omits_the_canvas_copy_when_none_was_written(self):
+        """check_all_drift(include_diff=False) writes no candidate file."""
+        out = self._report([dict(self.ITEM)])
+
+        assert 'canvas_qmd_path' not in out['drifted'][0]
+
     def test_reports_the_course(self):
         out = self._report([])
         assert out['course_id'] == 74
