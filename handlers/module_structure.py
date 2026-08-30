@@ -151,9 +151,16 @@ def fetch_module_structure(course, content_root: str,
         norm_to_local_dir[_normalize_name(entry)] = entry
 
     # Batch-fetch updated_at for pages only (1 API call).
-    # Assignment updated_at is NOT reliable — Canvas bumps it for student
-    # submissions, grading, due date changes, etc. No content-specific
-    # timestamp exists in the Canvas API for assignments.
+    #
+    # It is not a content timestamp for anything, and the comment here used to
+    # imply it was reliable for pages. It is not: publishing a page bumps it,
+    # so the panel reported "Canvas newer" on a page immediately after
+    # publishing it from the panel. For assignments it is worse still, moving
+    # for submissions, grading and due date changes, which is why it is not
+    # fetched for them at all.
+    #
+    # Treat it as "something happened here", never as "the content differs".
+    # A content hash answers that; see with_drift above.
     page_updated = {}
     # A module item for a Page carries no content_id, only page_url, while the
     # sync map records the numeric page_id. Without this bridge a page can
@@ -232,7 +239,8 @@ def fetch_module_structure(course, content_root: str,
             indent = getattr(item, 'indent', 0)
             external_url = getattr(item, 'external_url', None)
 
-            # Look up updated_at — only for Pages (reliable)
+            # Look up updated_at, pages only. A hint that something moved,
+            # not evidence that the content did. See the note above.
             updated_at = ''
             if item_type == 'Page':
                 page_slug = getattr(item, 'page_url', '')

@@ -654,14 +654,19 @@ function syncStatus(item: ModuleItem): { cls: string; text: string; title: strin
   const canvasTime = item.updated_at ? new Date(item.updated_at).getTime() : 0;
 
   if (syncTime) {
-    // canvas_drift === false means the hash was checked and Canvas is clean, so
-    // an updated_at bump is submissions or grading rather than an edit.
-    const canvasChanged = item.canvas_drift === false ? false : canvasTime > syncTime + 60000;
-    if (canvasChanged) {
+    // updated_at is not a content timestamp for anything. Canvas bumps it for
+    // publishing, grading and settings changes, so it cannot say the content
+    // changed, only that something happened. Claiming "Canvas newer" from it
+    // made the panel accuse Canvas of an edit the panel itself had just caused
+    // by publishing an item. Only the hash gets to make that claim; the
+    // timestamp gets to raise the question.
+    if (item.canvas_drift == null && canvasTime > syncTime + 60000) {
       return {
-        cls: 'canvas-newer',
-        text: 'Canvas newer',
-        title: 'Canvas was edited after the last sync. Syncing overwrites it.',
+        cls: 'check-canvas',
+        text: 'Check Canvas',
+        title: 'Canvas reports activity since the last sync, but a timestamp '
+          + 'moves for publishing and settings changes too, so it may not be the '
+          + 'content. Press Check Canvas to compare it properly.',
       };
     }
     if (localTime > syncTime + 60000) {
@@ -864,7 +869,7 @@ function renderBody(data: StructureData): string {
       }
       // Only offered where Canvas is known to differ. Everywhere else it
       // would spend a Canvas round trip to say "nothing changed".
-      if (hasLocal && status.cls === 'canvas-newer') {
+      if (hasLocal && (status.cls === 'canvas-newer' || status.cls === 'check-canvas')) {
         h += '<button class="action-btn diff-btn" onclick="event.stopPropagation();doDiff(\''
           + safePath.replace(/'/g, "\\'") + '\')" title="Show what changed in Canvas, side by side with your local file">Diff</button>';
       }
@@ -980,6 +985,7 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .item .status.in-sync{color:var(--vscode-descriptionForeground);font-weight:400}
 .item .status.local-newer{background:rgba(32,201,151,0.16);color:#20c997}
 .item .status.canvas-newer{background:rgba(255,193,7,0.18);color:#ffc107}
+.item .status.check-canvas{background:rgba(255,193,7,0.10);color:#d9a406;font-weight:400}
 .item .status.canvas-only{background:rgba(220,53,69,0.16);color:#ff6b7a}
 .item .status.not-synced{background:rgba(13,110,253,0.16);color:#6ea8fe}
 .item .status.unknown{background:var(--vscode-badge-background);color:var(--vscode-badge-foreground)}
