@@ -276,3 +276,92 @@ def test_drift_status_writes_no_diff_files(tmp_path, monkeypatch):
     fetch_module_structure(course, str(tmp_path), with_drift=True)
 
     assert seen["include_diff"] is False
+
+
+# --- Pages, and modules renamed in Canvas -----------------------------------
+
+class FakePage:
+    """A Canvas page as get_pages() returns it: numeric id plus a slug."""
+
+    def __init__(self, page_id, url, updated_at="2026-08-30T10:00:00Z"):
+        self.page_id = page_id
+        self.url = url
+        self.updated_at = updated_at
+
+
+def test_page_matches_through_its_slug(tmp_path):
+    """A Page module item has no content_id, only page_url.
+
+    The sync map records the numeric page_id, so matching on the item's own
+    fields can never succeed. get_pages() already gives the bridge between the
+    two, and without it a page falls back to matching on name inside its
+    module: fine until somebody renames the module in Canvas, at which point
+    the page reads as Canvas-only and its file as an orphan.
+    """
+    _qmd(tmp_path, "01_Intro/01_Guide.qmd", "Totally Different Title")
+    save_sync_map(str(tmp_path), {
+        MAP_COURSE_KEY: 74,
+        "01_Intro/01_Guide.qmd": {"id": 191818},
+    })
+    course = FakeCourse(
+        modules=[FakeModule("Intro", items=[
+            FakeItem("Install the thing", type="Page", content_id=None,
+                     page_url="install-the-thing"),
+        ])],
+        pages=[FakePage(191818, "install-the-thing")],
+    )
+
+    out = fetch_module_structure(course, str(tmp_path))
+
+    assert out["modules"][0]["items"][0]["local_path"] == "01_Intro/01_Guide.qmd"
+
+
+def test_module_renamed_in_canvas_still_finds_its_directory(tmp_path):
+    """Renaming a module in Canvas must not orphan the whole directory.
+
+    The directory is identified by name, which is what the sync itself uses,
+    but the items already know where they live. Whichever directory holds the
+    files they map to is this module's directory, whatever Canvas calls it.
+    """
+    _qmd(tmp_path, "04_Labs/01_Tensile.qmd", "Lab 1")
+    _qmd(tmp_path, "04_Labs/02_Torsion.qmd", "Lab 2")
+    save_sync_map(str(tmp_path), {
+        MAP_COURSE_KEY: 74,
+        "04_Labs/01_Tensile.qmd": {"id": 11},
+        "04_Labs/02_Torsion.qmd": {"id": 12},
+    })
+    # Canvas says "Laboratories"; the directory is still 04_Labs.
+    course = FakeCourse(modules=[FakeModule("Laboratories", items=[
+        FakeItem("Lab 1", type="Assignment", content_id=11),
+        FakeItem("Lab 2", type="Assignment", id=2, content_id=12),
+    ])])
+
+    out = fetch_module_structure(course, str(tmp_path))
+
+    assert out["modules"][0]["local_dir"] == "04_Labs"
+    assert out["local_only_modules"] == []
+
+
+def test_renamed_module_still_adopts_its_unsynced_files(tmp_path):
+    """An unsynced file belongs to its module, not to a "no module" list.
+
+    The reverse lookup was keyed on the Canvas module name, so a rename sent
+    every unmatched file in the directory to the orphan list while the module
+    it belongs to sat right there with its other items matched.
+    """
+    _qmd(tmp_path, "04_Labs/01_Tensile.qmd", "Lab 1")
+    _qmd(tmp_path, "04_Labs/09_Setup.qmd", "Setup guide")
+    save_sync_map(str(tmp_path), {
+        MAP_COURSE_KEY: 74,
+        "04_Labs/01_Tensile.qmd": {"id": 11},
+    })
+    course = FakeCourse(modules=[FakeModule("Laboratories", items=[
+        FakeItem("Lab 1", type="Assignment", content_id=11),
+    ])])
+
+    out = fetch_module_structure(course, str(tmp_path))
+
+    titles = {i["title"]: i for i in out["modules"][0]["items"]}
+    assert "Setup guide" in titles
+    assert titles["Setup guide"]["local_only"] is True
+    assert out["local_only_modules"] == []

@@ -155,11 +155,23 @@ def fetch_module_structure(course, content_root: str,
     # submissions, grading, due date changes, etc. No content-specific
     # timestamp exists in the Canvas API for assignments.
     page_updated = {}
+    # A module item for a Page carries no content_id, only page_url, while the
+    # sync map records the numeric page_id. Without this bridge a page can
+    # never be matched by id, and falls back to matching on name inside its
+    # module: the moment somebody renames the module in Canvas, the page looks
+    # Canvas-only and its local file looks orphaned.
+    page_id_by_slug = {}
     for p in course.get_pages():
-        page_updated[getattr(p, 'url', '')] = getattr(p, 'updated_at', '')
-        slug = getattr(p, 'url', '').rsplit('/', 1)[-1] if getattr(p, 'url', '') else ''
+        url = getattr(p, 'url', '') or ''
+        page_updated[url] = getattr(p, 'updated_at', '')
+        page_id = getattr(p, 'page_id', None)
+        if page_id is not None:
+            page_id_by_slug[url] = page_id
+        slug = url.rsplit('/', 1)[-1] if url else ''
         if slug:
             page_updated[slug] = getattr(p, 'updated_at', '')
+            if page_id is not None:
+                page_id_by_slug[slug] = page_id
 
     # One pass over the sync map, not one per item. Empty and never consulted
     # unless the caller asked, so the default path makes no extra requests.
@@ -168,17 +180,51 @@ def fetch_module_structure(course, content_root: str,
         for d in check_all_drift(course, content_root, include_diff=False):
             drifted_paths.add(d['file'])
 
+    def _id_match(item):
+        """The local file for an item, from the sync map alone. No guessing."""
+        item_id = (getattr(item, 'content_id', None)
+                   or getattr(item, 'page_url', None)
+                   or getattr(item, 'id', None))
+        hit = None
+        if item_id is not None:
+            hit = id_to_local.get(item_id) or id_to_local.get(str(item_id))
+        if not hit and item.type == 'Page':
+            slug = getattr(item, 'page_url', None)
+            if slug:
+                hit = id_to_local.get(slug)
+                if not hit:
+                    pid = page_id_by_slug.get(slug)
+                    if pid is not None:
+                        hit = id_to_local.get(pid) or id_to_local.get(str(pid))
+        return hit
+
     modules = []
     for module in course.get_modules():
         mod_name = module.name
         mod_items = []
+        items = list(module.get_module_items())
 
-        # Find matching local module dir by normalized name
+        # Which local directory is this module? By name first, because that is
+        # what the sync itself uses. Renaming a module in Canvas breaks that,
+        # so fall back to asking the items: whichever directory holds the files
+        # they already map to is this module's directory, whatever it is called.
         norm_mod = _normalize_name(mod_name)
-        local_mod_files = local_name_index.get(norm_mod, {})
-        local_mod_titles = local_title_index.get(norm_mod, {})
+        local_dir = norm_to_local_dir.get(norm_mod)
+        if local_dir is None:
+            votes = {}
+            for it in items:
+                hit = _id_match(it)
+                if hit and '/' in hit:
+                    d = hit.split('/')[0]
+                    votes[d] = votes.get(d, 0) + 1
+            if votes:
+                local_dir = max(votes, key=votes.get)
 
-        for item in module.get_module_items():
+        norm_dir = _normalize_name(local_dir) if local_dir else norm_mod
+        local_mod_files = local_name_index.get(norm_dir, {})
+        local_mod_titles = local_title_index.get(norm_dir, {})
+
+        for item in items:
             item_type = item.type
             item_title = getattr(item, 'title', 'Untitled')
             item_id = getattr(item, 'content_id', None) or getattr(item, 'page_url', None) or getattr(item, 'id', None)
@@ -193,9 +239,7 @@ def fetch_module_structure(course, content_root: str,
                 updated_at = page_updated.get(page_slug, '')
 
             # Strategy 1: match via sync map (canvas ID)
-            local_path = None
-            if item_id is not None:
-                local_path = id_to_local.get(item_id) or id_to_local.get(str(item_id))
+            local_path = _id_match(item)
             if not local_path and item_type == 'Page':
                 page_url = getattr(item, 'page_url', None)
                 if page_url:
@@ -291,7 +335,7 @@ def fetch_module_structure(course, content_root: str,
             'id': module.id,
             'published': getattr(module, 'published', False),
             'items': mod_items,
-            'local_dir': norm_to_local_dir.get(norm_mod, ''),
+            'local_dir': local_dir or '',
         })
 
     # Inject unmatched local files into their matching Canvas modules
@@ -301,10 +345,17 @@ def fetch_module_structure(course, content_root: str,
     matched_paths = {item['local_path'] for mod in modules for item in mod['items'] if item['local_path']}
     unmatched_local = sorted(all_local_paths - matched_paths)
 
-    # Build reverse lookup: normalized module name → module index
+    # Reverse lookup for placing unmatched local files, keyed on the module's
+    # resolved local directory rather than its Canvas name. Keying on the name
+    # meant that renaming a module in Canvas sent every unmatched file in its
+    # directory to the "no Canvas module" list, even though the module is right
+    # there and the rest of its items matched.
     norm_to_mod_idx = {}
     for idx, mod in enumerate(modules):
         norm_to_mod_idx[_normalize_name(mod['name'])] = idx
+    for idx, mod in enumerate(modules):
+        if mod['local_dir']:
+            norm_to_mod_idx[_normalize_name(mod['local_dir'])] = idx
 
     orphan_files_by_dir = {}
     for rel_path in unmatched_local:
