@@ -1009,9 +1009,11 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .new-menu-item:hover{background:var(--vscode-list-hoverBackground)}
 .orphan-module{border-color:rgba(13,110,253,0.3)}
 .pub-toggle{cursor:pointer}.pub-toggle:hover{opacity:0.7}
-.pub-btn{font-size:10px;padding:2px 6px;min-width:62px;border:none;font-weight:600}
-.pub-btn.pub-on{background:rgba(25,135,84,0.16);color:#4ec98a}
-.pub-btn.pub-off{background:var(--vscode-badge-background);color:var(--vscode-descriptionForeground);font-weight:400}
+.pub-btn{font-size:10px;padding:2px 6px;min-width:76px;font-weight:600;justify-content:center}
+.pub-btn.pub-on{border-color:#198754;color:#75b798;background:rgba(25,135,84,0.12)}
+.pub-btn.pub-on:hover{background:rgba(25,135,84,0.22)}
+.pub-btn.pub-off{border-color:var(--vscode-descriptionForeground);color:var(--vscode-foreground);background:none;font-weight:400}
+.pub-btn.pub-off:hover{background:var(--vscode-list-hoverBackground)}
 .batch-bar{position:fixed;bottom:0;left:0;right:0;background:var(--vscode-sideBar-background);border-top:2px solid var(--vscode-focusBorder);padding:10px 24px;display:flex;align-items:center;gap:12px;z-index:100;font-size:13px}
 .batch-bar.hidden{display:none}
 #batch-count{font-weight:600;min-width:90px}
