@@ -306,6 +306,7 @@ def main():
     parser.add_argument("--exit-code", action="store_true", help="With --check-drift, exit 2 when drift is found. Without it the check reports and exits 0, as git diff does.")
     parser.add_argument("--only", help="Sync only a specific file (relative path from content dir, e.g. '01_Intro/02_Welcome.qmd').")
     parser.add_argument("--module-structure", action="store_true", help="Print the Canvas module structure as JSON, reconciled with local files. Reads only, syncs nothing.")
+    parser.add_argument("--with-drift", action="store_true", help="With --module-structure: also report whether Canvas has been edited since the last sync. Costs one request per synced item.")
     parser.add_argument("--import-item", help="Import a single Canvas item as JSON: {\"module_dir\":...,\"item_type\":...,\"content_id\":...,\"page_url\":...,\"title\":...,\"published\":...,\"indent\":...,\"external_url\":...}")
     parser.add_argument("--set-published", help="Set published state as JSON: {\"target\":\"module\"|\"item\",\"module_id\":N,\"item_id\":N,\"published\":bool}")
     parser.add_argument("--create-module", help="Create a new Canvas module as JSON: {\"name\":\"...\",\"published\":bool}")
@@ -401,7 +402,10 @@ def main():
     # Structure mode: report what Canvas holds and how it lines up with local
     # files, then exit. Read-only, and JSON on stdout so a caller can parse it.
     if args.module_structure:
-        print(json.dumps(fetch_module_structure(course, content_root), ensure_ascii=False))
+        print(json.dumps(
+            fetch_module_structure(course, content_root,
+                                   with_drift=args.with_drift),
+            ensure_ascii=False))
         return 0
 
     # Import single item mode

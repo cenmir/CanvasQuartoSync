@@ -247,3 +247,41 @@ class TestDriftReport:
 
     def test_output_is_json_serialisable(self):
         json.dumps(self._report([self.ITEM], include_diff=True))
+
+
+def test_include_diff_false_reports_status_without_building_diffs(tmp_path, monkeypatch):
+    """The panel wants a status light, not a diff editor.
+
+    Building the diff converts HTML to text per item and writes a candidate
+    .qmd into .canvas_diff_temp/. That is wasted work when nobody is going to
+    open a diff, and it leaves files behind on every panel refresh.
+    """
+    from unittest.mock import MagicMock
+    import handlers.drift_detector as dd
+    from handlers.content_utils import save_sync_map
+
+    (tmp_path / "01_Intro").mkdir()
+    (tmp_path / "01_Intro" / "01_Welcome.qmd").write_text(
+        '---\ntitle: "Welcome"\ncanvas:\n  type: page\n---\n\nLocal.\n', encoding="utf-8")
+    save_sync_map(str(tmp_path), {
+        "01_Intro/01_Welcome.qmd": {"id": 5, "canvas_hash": "stale"},
+    })
+
+    page = MagicMock()
+    page.body = "<p>Changed in Canvas</p>"
+    page.title = "Welcome"
+    course = MagicMock()
+    course.get_page.return_value = page
+
+    called = []
+    monkeypatch.setattr(dd, "_write_diff_temp",
+                        lambda *a, **k: called.append(a) or "never")
+
+    drifted = dd.check_all_drift(course, str(tmp_path), include_diff=False)
+
+    assert len(drifted) == 1
+    assert drifted[0]["file"] == "01_Intro/01_Welcome.qmd"
+    assert "diff" not in drifted[0]
+    assert "canvas_qmd_path" not in drifted[0]
+    assert called == []
+    assert not (tmp_path / ".canvas_diff_temp").exists()

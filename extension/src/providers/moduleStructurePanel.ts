@@ -29,6 +29,8 @@ interface ModuleItem {
   updated_at?: string;
   local_mtime?: string;
   last_synced_at?: string;
+  // true drifted, false checked and clean, null/undefined not checked.
+  canvas_drift?: boolean | null;
   local_only?: boolean;
 }
 
@@ -78,7 +80,7 @@ export async function openModuleStructurePanel(extensionPath: string): Promise<v
         vscode.window.showTextDocument(uri);
       }
     } else if (msg.type === 'refresh') {
-      await refreshPanel(extensionPath);
+      await refreshPanel(extensionPath, !!msg.withDrift);
     } else if (msg.type === 'sync') {
       if (ws && msg.localPath) {
         await handleSync(extensionPath, ws, msg.localPath, true);
@@ -160,9 +162,9 @@ export async function openModuleStructurePanel(extensionPath: string): Promise<v
   await refreshPanel(extensionPath);
 }
 
-async function refreshPanel(extensionPath: string): Promise<void> {
+async function refreshPanel(extensionPath: string, withDrift = false): Promise<void> {
   if (!currentPanel) return;
-  const result = await fetchStructure(extensionPath);
+  const result = await fetchStructure(extensionPath, withDrift);
   if (!currentPanel) return;
 
   if (result.type === 'error') {
@@ -516,7 +518,8 @@ async function handleBatchDelete(extensionPath: string, items: Record<string, un
 // ── Fetch from Python ───────────────────────────────────────────────
 
 async function fetchStructure(
-  extensionPath: string
+  extensionPath: string,
+  withDrift = false
 ): Promise<{ type: string; data?: StructureData; message?: string }> {
   const workspaceRoot = getWorkspaceRoot();
   if (!workspaceRoot) return { type: 'error', message: 'No workspace folder open.' };
@@ -527,6 +530,9 @@ async function fetchStructure(
   const cqsRoot = resolveCqsRoot(extensionPath);
   const scriptPath = path.join(cqsRoot, 'sync_to_canvas.py');
   const args = [scriptPath, workspaceRoot, '--module-structure'];
+  // Off by default: drift costs one Canvas request per synced item, and
+  // opening the panel should not pay for an answer nobody asked for.
+  if (withDrift) args.push('--with-drift');
 
   log.appendLine('[fetch] python=' + pythonPath);
   log.appendLine('[fetch] cwd=' + workspaceRoot);
@@ -544,7 +550,11 @@ async function fetchStructure(
       setSyncing(false);
       log.appendLine('[fetch] exit=' + code);
       if (code !== 0) {
-        resolve({ type: 'error', message: 'Python exit ' + code + ': ' + stderr.slice(0, 500) });
+        // The tool logs through rich, which writes to stdout, so stderr is
+        // empty on a normal failure and this message used to read just
+        // 'Python exit 1:'. Prefer whichever stream actually said something.
+        const detail = (stderr.trim() || stdout.trim() || '(no output)').slice(0, 500);
+        resolve({ type: 'error', message: 'Python exit ' + code + ': ' + detail });
         return;
       }
       // --module-structure implies --quiet upstream, so stdout is the
@@ -621,7 +631,7 @@ function renderBody(data: StructureData): string {
   infoParts.push(data.modules.length + ' modules');
   infoParts.push(canvasItems + ' items');
   h += '<div class="subtitle">' + infoParts.join(' &middot; ') + '</div>';
-  h += '</div><div style="display:flex;gap:8px"><button class="refresh-btn" onclick="doCreateModule()" title="Create a new Canvas module">+ New Module</button><button class="refresh-btn" onclick="refresh()">Refresh</button></div></div>';
+  h += '</div><div style="display:flex;gap:8px"><button class="refresh-btn" onclick="doCreateModule()" title="Create a new Canvas module">+ New Module</button><button class="refresh-btn" onclick="checkCanvas()" title="Ask Canvas what has changed since the last sync. One request per synced item, so it takes a moment.">Check Canvas</button><button class="refresh-btn" onclick="refresh()">Refresh</button></div></div>';
 
   // Stats
   h += '<div class="stats">';
@@ -703,11 +713,20 @@ function renderBody(data: StructureData): string {
         dotCls = 'not-synced';
       } else if (!hasLocal) {
         dotCls = 'canvas-only';
+      } else if (item.canvas_drift === true) {
+        // A content hash said Canvas changed. That beats any timestamp, and it
+        // is the only signal that works for assignments at all: Canvas bumps
+        // their updated_at for submissions and grading, so it is never fetched.
+        dotCls = 'canvas-newer';
       } else if (item.last_synced_at) {
         const syncTime = new Date(item.last_synced_at).getTime();
         const canvasTime = item.updated_at ? new Date(item.updated_at).getTime() : 0;
         const localTime = item.local_mtime ? new Date(item.local_mtime).getTime() : 0;
-        const canvasChanged = canvasTime > syncTime + 60000;
+        // canvas_drift === false means the hash was checked and Canvas is
+        // clean, so an updated_at bump is submissions or grading, not content.
+        const canvasChanged = item.canvas_drift === false
+          ? false
+          : canvasTime > syncTime + 60000;
         const localChanged = localTime > syncTime + 60000;
         if (canvasChanged && localChanged) {
           dotCls = 'canvas-newer';
@@ -961,6 +980,7 @@ function openUrl(u){vscode.postMessage({type:"openUrl",url:u})}
 function doSync(p){vscode.postMessage({type:"sync",localPath:p})}
 function doSetPublished(d){vscode.postMessage({type:"setPublished",data:d})}
 function doCreateModule(){vscode.postMessage({type:"createModule"})}
+function checkCanvas(){vscode.postMessage({type:"refresh",withDrift:true})}
 function doImport(jsonStr){try{var d=JSON.parse(jsonStr);vscode.postMessage({type:"import",itemData:d})}catch(e){console.error(e)}}
 function toggleNewMenu(mi){
   var menu=document.getElementById("new-menu-"+mi);

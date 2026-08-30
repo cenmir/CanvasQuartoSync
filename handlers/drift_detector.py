@@ -342,7 +342,7 @@ def drift_report(course, drifted, content_root, include_diff=False):
     }
 
 
-def check_all_drift(course, content_root: str) -> list:
+def check_all_drift(course, content_root: str, include_diff: bool = True) -> list:
     """Check drift for all synced items.
 
     Returns a list of dicts for items that have drifted:
@@ -351,6 +351,12 @@ def check_all_drift(course, content_root: str) -> list:
 
     canvas_qmd_path is a temp file containing the Canvas content converted
     to .qmd format, suitable for opening in VS Code's diff editor.
+
+    ``include_diff=False`` answers only *whether* each item drifted, and
+    writes nothing. A caller that just wants a status light should use it:
+    building the diff costs an HTML-to-text conversion per item and leaves
+    files in .canvas_diff_temp/, which is wasted work when nobody is going
+    to open a diff editor. ``diff`` and ``canvas_qmd_path`` are then absent.
     """
     sync_map = load_sync_map(content_root)
     drifted_items = []
@@ -398,28 +404,28 @@ def check_all_drift(course, content_root: str) -> list:
                 if current_html is not None:
                     current_hash = compute_content_hash(current_html)
                     if current_hash != stored_hash:
-                        # Build diff
-                        abs_path = os.path.join(content_root, rel_path.replace('/', os.sep))
-                        diff_text = _compute_diff(content_root, abs_path, current_html)
-
-                        # Build Canvas QMD for VS Code diff editor
-                        canvas_qmd = _canvas_html_to_qmd(
-                            current_html, item_type, canvas_obj,
-                            sync_map, content_root
-                        )
-                        canvas_qmd_path = _write_diff_temp(
-                            content_root, rel_path, canvas_qmd
-                        )
-
-                        drifted_items.append({
+                        item = {
                             'file': rel_path,
                             'type': item_type,
                             'title': title,
                             'stored_hash': stored_hash,
                             'current_hash': current_hash,
-                            'diff': diff_text,
-                            'canvas_qmd_path': canvas_qmd_path,
-                        })
+                        }
+
+                        if include_diff:
+                            abs_path = os.path.join(content_root, rel_path.replace('/', os.sep))
+                            item['diff'] = _compute_diff(content_root, abs_path, current_html)
+
+                            # Canvas QMD for VS Code's diff editor
+                            canvas_qmd = _canvas_html_to_qmd(
+                                current_html, item_type, canvas_obj,
+                                sync_map, content_root
+                            )
+                            item['canvas_qmd_path'] = _write_diff_temp(
+                                content_root, rel_path, canvas_qmd
+                            )
+
+                        drifted_items.append(item)
 
         except Exception as e:
             logger.debug("  Could not check drift for %s: %s", rel_path, e)

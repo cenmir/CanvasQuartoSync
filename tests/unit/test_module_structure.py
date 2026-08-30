@@ -185,3 +185,94 @@ def test_nothing_is_written_to_canvas(tmp_path):
 
     out = fetch_module_structure(course, str(tmp_path))
     assert out["modules"][0]["items"][0]["local_path"] == "01_Intro/01_Welcome.qmd"
+
+
+# --- Render artefacts -------------------------------------------------------
+
+def test_render_artefacts_are_not_treated_as_content(tmp_path):
+    """A sync in flight leaves tmp-pdf-*.qmd next to the file being rendered.
+
+    Refreshing the panel at that moment matched the Canvas item to the
+    artefact and reported the real file as local-only: a phantom "not synced"
+    row and a local_path pointing at a file that was about to be deleted.
+    Every handler and the validator already skip these prefixes.
+    """
+    _qmd(tmp_path, "01_Intro/01_Welcome.qmd", "Welcome")
+    _qmd(tmp_path, "01_Intro/tmp-pdf-01_Welcome.qmd", "Welcome")
+    _qmd(tmp_path, "01_Intro/_temp_quiz_render.qmd", "Welcome")
+
+    course = FakeCourse(modules=[FakeModule("Intro", items=[FakeItem("Welcome")])])
+    out = fetch_module_structure(course, str(tmp_path))
+
+    item = out["modules"][0]["items"][0]
+    assert item["local_path"] == "01_Intro/01_Welcome.qmd"
+    # And no artefact is left over as a file with no Canvas counterpart.
+    assert out["local_only_modules"] == []
+    assert not [i for i in out["modules"][0]["items"] if i.get("local_only")]
+
+
+# --- Drift status -----------------------------------------------------------
+
+def test_drift_is_not_checked_unless_asked(tmp_path, monkeypatch):
+    """Opening the panel must not pay for a Canvas request per item."""
+    calls = []
+
+    def fail(*a, **k):
+        calls.append(a)
+        return []
+
+    monkeypatch.setattr("handlers.module_structure.check_all_drift", fail)
+    _qmd(tmp_path, "01_Intro/01_Welcome.qmd", "Welcome")
+    course = FakeCourse(modules=[FakeModule("Intro", items=[FakeItem("Welcome")])])
+
+    out = fetch_module_structure(course, str(tmp_path))
+
+    assert calls == []
+    # None means "not checked", which is not the same as "no drift".
+    assert out["modules"][0]["items"][0]["canvas_drift"] is None
+
+
+def test_drift_is_reported_per_item_when_asked(tmp_path, monkeypatch):
+    """The only reliable Canvas-side signal for an assignment.
+
+    updated_at is fetched for pages alone, because Canvas bumps an
+    assignment's timestamp for submissions and grading. A content hash is
+    what makes the Canvas-newer dot mean anything on an assignment.
+    """
+    _qmd(tmp_path, "01_Labs/01_Lab.qmd", "Lab")
+    _qmd(tmp_path, "01_Labs/02_Other.qmd", "Other")
+    save_sync_map(str(tmp_path), {
+        MAP_COURSE_KEY: 74,
+        "01_Labs/01_Lab.qmd": {"id": 11},
+        "01_Labs/02_Other.qmd": {"id": 12},
+    })
+    monkeypatch.setattr(
+        "handlers.module_structure.check_all_drift",
+        lambda course, root, include_diff=True: [{"file": "01_Labs/01_Lab.qmd"}])
+
+    course = FakeCourse(modules=[FakeModule("Labs", items=[
+        FakeItem("Lab", type="Assignment", content_id=11),
+        FakeItem("Other", type="Assignment", id=2, content_id=12),
+    ])])
+    out = fetch_module_structure(course, str(tmp_path), with_drift=True)
+
+    by_title = {i["title"]: i for i in out["modules"][0]["items"]}
+    assert by_title["Lab"]["canvas_drift"] is True
+    assert by_title["Other"]["canvas_drift"] is False
+
+
+def test_drift_status_writes_no_diff_files(tmp_path, monkeypatch):
+    """A status light should not litter .canvas_diff_temp on every refresh."""
+    seen = {}
+
+    def spy(course, root, include_diff=True):
+        seen["include_diff"] = include_diff
+        return []
+
+    monkeypatch.setattr("handlers.module_structure.check_all_drift", spy)
+    _qmd(tmp_path, "01_Intro/01_Welcome.qmd", "Welcome")
+    course = FakeCourse(modules=[FakeModule("Intro", items=[FakeItem("Welcome")])])
+
+    fetch_module_structure(course, str(tmp_path), with_drift=True)
+
+    assert seen["include_diff"] is False

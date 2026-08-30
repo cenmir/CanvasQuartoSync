@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 import frontmatter as fm
 
 from handlers.content_utils import load_sync_map, save_sync_map, is_valid_name
+from handlers.drift_detector import check_all_drift
 
 
 def _normalize_name(name: str) -> str:
@@ -58,11 +59,24 @@ def _backfill_last_synced(sync_map: dict, content_root: str):
         save_sync_map(content_root, sync_map)
 
 
-def fetch_module_structure(course, content_root: str) -> dict:
+def fetch_module_structure(course, content_root: str,
+                          with_drift: bool = False) -> dict:
     """Fetch Canvas module structure and match against local files.
 
     Returns a dict with course info and modules, each with items annotated
     with whether they exist locally.
+
+    ``with_drift`` additionally reports, per item, whether Canvas has been
+    edited since the last sync, as ``canvas_drift``. It is off by default
+    because it costs one Canvas request per synced item, which would make
+    opening a panel several seconds slower for an answer nobody asked for.
+    Without it every item reports ``canvas_drift: None``, meaning "not
+    checked" rather than "no drift".
+
+    This is the only reliable answer for assignments. ``updated_at`` is
+    fetched for pages alone, because Canvas bumps an assignment's timestamp
+    for submissions, grading and due date edits, so it says nothing about
+    the content. A content hash does.
     """
     sync_map = load_sync_map(content_root)
 
@@ -105,6 +119,13 @@ def fetch_module_structure(course, content_root: str) -> dict:
         title_map = {}
         for fname in sorted(os.listdir(mod_dir)):
             fpath = os.path.join(mod_dir, fname)
+            # Quarto render artefacts, written next to the file being rendered
+            # and deleted when it finishes. A panel refresh during a sync would
+            # otherwise match a Canvas item to 'tmp-pdf-01_Page.qmd' and report
+            # the real file as local-only. Every handler and the validator skip
+            # these already; this walk was the one place that did not.
+            if fname.startswith(('_temp_', 'tmp-')):
+                continue
             if os.path.isfile(fpath) and (fname.endswith('.qmd') or fname.endswith('.md') or fname.endswith('.json') or fname.endswith('.pdf')):
                 rel = os.path.join(entry, fname).replace('\\', '/')
                 files.append(rel)
@@ -139,6 +160,13 @@ def fetch_module_structure(course, content_root: str) -> dict:
         slug = getattr(p, 'url', '').rsplit('/', 1)[-1] if getattr(p, 'url', '') else ''
         if slug:
             page_updated[slug] = getattr(p, 'updated_at', '')
+
+    # One pass over the sync map, not one per item. Empty and never consulted
+    # unless the caller asked, so the default path makes no extra requests.
+    drifted_paths = set()
+    if with_drift:
+        for d in check_all_drift(course, content_root, include_diff=False):
+            drifted_paths.add(d['file'])
 
     modules = []
     for module in course.get_modules():
@@ -251,6 +279,8 @@ def fetch_module_structure(course, content_root: str) -> dict:
                 'updated_at': updated_at,
                 'local_mtime': local_mtime,
                 'last_synced_at': path_to_last_synced.get(local_path, '') if local_path else '',
+                # True drifted, False checked and clean, None not checked.
+                'canvas_drift': (local_path in drifted_paths) if (with_drift and local_path) else None,
             }
             if external_url:
                 item_data['external_url'] = external_url
