@@ -3,6 +3,7 @@ import * as path from 'path';
 import { spawn } from 'child_process';
 import { resolvePython, resolveCqsRoot } from '../python/venvResolver';
 import { getWorkspaceRoot } from '../config/configLoader';
+import { diffFileWithCanvas } from '../commands/diffWithCanvas';
 import { setSyncing } from './statusBar';
 
 // ── Module Structure Panel ──────────────────────────────────────────
@@ -79,6 +80,8 @@ export async function openModuleStructurePanel(extensionPath: string): Promise<v
         const uri = vscode.Uri.file(path.join(ws, msg.path));
         vscode.window.showTextDocument(uri);
       }
+    } else if (msg.type === 'diff') {
+      if (msg.localPath) await diffFileWithCanvas(extensionPath, msg.localPath);
     } else if (msg.type === 'refresh') {
       await refreshPanel(extensionPath, !!msg.withDrift);
     } else if (msg.type === 'sync') {
@@ -859,6 +862,12 @@ function renderBody(data: StructureData): string {
           + mod.id + ',item_id:' + item.module_item_id + ',published:' + togglePub + '})" title="' + pubTitle + '">'
           + (item.published ? 'Published' : 'Draft') + '</button>';
       }
+      // Only offered where Canvas is known to differ. Everywhere else it
+      // would spend a Canvas round trip to say "nothing changed".
+      if (hasLocal && status.cls === 'canvas-newer') {
+        h += '<button class="action-btn diff-btn" onclick="event.stopPropagation();doDiff(\''
+          + safePath.replace(/'/g, "\\'") + '\')" title="Show what changed in Canvas, side by side with your local file">Diff</button>';
+      }
       if (isLocalOnly || hasLocal) {
         // Has local file: Sync button
         h += '<button class="action-btn sync-btn" onclick="event.stopPropagation();doSync(\''
@@ -986,6 +995,8 @@ body{font-family:var(--vscode-font-family);color:var(--vscode-foreground);backgr
 .action-btn.import-btn:hover{background:rgba(13,110,253,0.15)}
 .action-btn.sync-btn{border-color:#198754;color:#75b798}
 .action-btn.sync-btn:hover{background:rgba(25,135,84,0.15)}
+.action-btn.diff-btn{border-color:#ffc107;color:#ffc107}
+.action-btn.diff-btn:hover{background:rgba(255,193,7,0.15)}
 .action-btn.delete-btn{border-color:#dc3545;color:#ea868f}
 .action-btn.delete-btn:hover{background:rgba(220,53,69,0.15)}
 .mod-cb{cursor:pointer;width:14px;height:14px;accent-color:#dc3545;margin-right:2px}
@@ -1031,6 +1042,7 @@ function doSync(p){vscode.postMessage({type:"sync",localPath:p})}
 function doSetPublished(d){vscode.postMessage({type:"setPublished",data:d})}
 function doCreateModule(){vscode.postMessage({type:"createModule"})}
 function checkCanvas(){vscode.postMessage({type:"refresh",withDrift:true})}
+function doDiff(p){vscode.postMessage({type:"diff",localPath:p})}
 function doImport(jsonStr){try{var d=JSON.parse(jsonStr);vscode.postMessage({type:"import",itemData:d})}catch(e){console.error(e)}}
 function toggleNewMenu(mi){
   var menu=document.getElementById("new-menu-"+mi);

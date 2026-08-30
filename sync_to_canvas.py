@@ -435,6 +435,14 @@ def main():
         logger.info("[bold cyan]Checking for Canvas-side modifications...[/bold cyan]")
         drifted = check_all_drift(course, content_root)
 
+        # --only was accepted and then ignored here, so "check just this file"
+        # checked every synced item and offered the caller a list of all of
+        # them. The flag means the same thing for a drift check as it does for
+        # a sync: act on this one file.
+        if args.only:
+            wanted = args.only.replace('\\', '/')
+            drifted = [d for d in drifted if d['file'] == wanted]
+
         if args.json:
             print(json.dumps(
                 drift_report(course, drifted, content_root, args.show_diff),

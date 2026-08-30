@@ -60,21 +60,58 @@ export async function diffWithCanvas(extensionPath: string): Promise<void> {
 
   if (!picked) return;
 
+  await runDriftCheck(extensionPath, picked.value === 'all' ? null : picked.value);
+}
+
+/**
+ * Compare one file with Canvas and open the diff, with no picker.
+ *
+ * The Module Structure panel knows which row was clicked, so asking again
+ * would be asking a question the user already answered.
+ *
+ * `relPath` is relative to the workspace root, the form the panel already
+ * carries and the form --only expects.
+ */
+export async function diffFileWithCanvas(
+  extensionPath: string,
+  relPath: string
+): Promise<void> {
+  const workspaceRoot = getWorkspaceRoot();
+  if (!workspaceRoot) return;
+  await runDriftCheck(extensionPath, path.join(workspaceRoot, relPath));
+}
+
+async function runDriftCheck(
+  extensionPath: string,
+  targetPath: string | null
+): Promise<void> {
+  const workspaceRoot = getWorkspaceRoot();
+  if (!workspaceRoot) {
+    vscode.window.showErrorMessage('No workspace folder open.');
+    return;
+  }
+
+  const pythonPath = resolvePython();
+  if (!pythonPath) {
+    vscode.window.showErrorMessage(
+      'Python virtual environment not found. Run install.ps1 first.'
+    );
+    return;
+  }
+
   const cqsRoot = resolveCqsRoot(extensionPath);
   const scriptPath = path.join(cqsRoot, 'sync_to_canvas.py');
   const args = [scriptPath, workspaceRoot, '--check-drift', '--json'];
 
-  if (picked.value !== 'all') {
-    const relativePath = path.relative(workspaceRoot, picked.value);
-    args.push('--only', relativePath);
+  if (targetPath) {
+    args.push('--only', path.relative(workspaceRoot, targetPath));
   }
 
   setSyncing(true);
 
-  const progressTitle =
-    picked.value === 'all'
-      ? 'Checking drift (all files)'
-      : `Checking drift (${path.basename(picked.value)})`;
+  const progressTitle = targetPath
+    ? `Checking drift (${path.basename(targetPath)})`
+    : 'Checking drift (all files)';
 
   vscode.window.withProgress(
     {
@@ -136,7 +173,9 @@ export async function diffWithCanvas(extensionPath: string): Promise<void> {
 
           if (driftItems.length === 0) {
             vscode.window.showInformationMessage(
-              'No drift detected. Canvas content matches your local files.'
+              targetPath
+                ? `No drift in ${path.basename(targetPath)}. Canvas matches your local file.`
+                : 'No drift detected. Canvas content matches your local files.'
             );
             return;
           }
