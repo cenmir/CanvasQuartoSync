@@ -16,7 +16,7 @@ from handlers.single_sync import build_handlers, find_or_create_module, sync_sin
 from handlers.module_structure import fetch_module_structure
 from handlers import __version__
 from handlers.config import get_api_credentials, get_course_id
-from handlers.drift_detector import check_all_drift, drift_report
+from handlers.drift_detector import check_all_drift, drift_report, forget_synced_file, forget_synced_dir
 
 
 def _normalize_name(name: str) -> str:
@@ -261,6 +261,10 @@ def _delete_items(course, content_root: str, payload_json: str) -> dict:
                     abs_p = os.path.join(content_root, local_path.replace('/', os.sep))
                     if os.path.isfile(abs_p):
                         os.remove(abs_p)
+                    # Unconditionally, even when the file was already gone: it
+                    # is the sync map entry, not the file, that makes a deleted
+                    # page keep showing up as synced in the module panel.
+                    forget_synced_file(content_root, local_path)
                 deleted += 1
 
             elif target == 'module':
@@ -273,6 +277,7 @@ def _delete_items(course, content_root: str, payload_json: str) -> dict:
                     abs_d = os.path.join(content_root, local_dir)
                     if os.path.isdir(abs_d):
                         shutil.rmtree(abs_d)
+                    forget_synced_dir(content_root, local_dir)
                 deleted += 1
 
             elif target == 'local_file':
@@ -281,6 +286,7 @@ def _delete_items(course, content_root: str, payload_json: str) -> dict:
                     abs_p = os.path.join(content_root, local_path.replace('/', os.sep))
                     if os.path.isfile(abs_p):
                         os.remove(abs_p)
+                    forget_synced_file(content_root, local_path)
                     deleted += 1
 
             else:

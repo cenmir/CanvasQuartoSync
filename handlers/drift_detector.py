@@ -169,6 +169,67 @@ def store_canvas_hash(content_root: str, file_path: str, canvas_html: str):
         logger.debug("    Could not write snapshot: %s", e)
 
 
+def _remove_snapshot(content_root: str, rel_path: str) -> bool:
+    """Delete the stored snapshot for a relative path, if there is one."""
+    # Built by hand rather than through _snapshot_path, which creates the
+    # snapshot directory as a side effect. Forgetting a file should never
+    # bring one into existence.
+    snap = os.path.join(content_root, SNAPSHOT_DIR,
+                        rel_path.replace('/', '__').replace(' ', '_') + '.html')
+    if not os.path.isfile(snap):
+        return False
+    try:
+        os.remove(snap)
+        return True
+    except OSError as e:
+        logger.debug("    Could not remove snapshot %s: %s", snap, e)
+        return False
+
+
+def forget_synced_file(content_root: str, rel_path: str) -> bool:
+    """Drop everything we remember about a file: sync map entry and snapshot.
+
+    The mirror of :func:`store_canvas_hash`. Without it, deleting content left
+    both behind, and the module panel went on reporting a file that is no
+    longer on disk as synced. The sharper failure is a stale entry that shares
+    a Canvas id with a live file: the reverse id lookup in module_structure is
+    last-write-wins, so the dead path could win and hide the real one.
+
+    Returns True if anything was removed.
+    """
+    rel_path = rel_path.replace('\\', '/')
+    removed = False
+
+    sync_map = load_sync_map(content_root)
+    if rel_path in sync_map:
+        del sync_map[rel_path]
+        save_sync_map(content_root, sync_map)
+        removed = True
+
+    if _remove_snapshot(content_root, rel_path):
+        removed = True
+
+    return removed
+
+
+def forget_synced_dir(content_root: str, local_dir: str) -> int:
+    """Forget every tracked file under a directory. Returns how many were dropped."""
+    prefix = local_dir.replace('\\', '/').rstrip('/') + '/'
+    sync_map = load_sync_map(content_root)
+    doomed = [k for k in sync_map if k.startswith(prefix)]
+    if not doomed:
+        return 0
+
+    for rel_path in doomed:
+        del sync_map[rel_path]
+    save_sync_map(content_root, sync_map)
+
+    for rel_path in doomed:
+        _remove_snapshot(content_root, rel_path)
+
+    return len(doomed)
+
+
 def check_drift(content_root: str, file_path: str, current_canvas_html: str) -> dict:
     """Check if Canvas content has drifted from what we last synced.
 
