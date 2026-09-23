@@ -365,3 +365,35 @@ def test_renamed_module_still_adopts_its_unsynced_files(tmp_path):
     assert "Setup guide" in titles
     assert titles["Setup guide"]["local_only"] is True
     assert out["local_only_modules"] == []
+
+
+def test_stale_map_entry_does_not_mask_the_file_on_disk(tmp_path):
+    """Two paths, one Canvas id: the one still on disk must win.
+
+    Renaming a file leaves the old key in the sync map, and the handlers'
+    title-search fallback then re-attaches the new name to the same page, so
+    both keys carry the same id. Last-write-wins used to hand the item to
+    whichever key came later in the file. When that was the deleted one, the
+    panel listed a file that no longer exists as synced and reported the real
+    file as local-only.
+    """
+    _qmd(tmp_path, "06_Genomgangar/02_Click_alongs.qmd", "FEA click-alongs")
+    # 03 is only in the map — it was deleted from disk.
+    save_sync_map(str(tmp_path), {
+        "06_Genomgangar/02_Click_alongs.qmd": {"id": 192422},
+        "06_Genomgangar/03_Files.qmd": {"id": 192422},
+    })
+
+    page = FakePage(192422, "fea-click-alongs")
+    item = FakeItem("FEA click-alongs", type="Page", id=1, page_url="fea-click-alongs")
+    course = FakeCourse(modules=[FakeModule("Genomgangar", id=9, items=[item])],
+                        pages=[page])
+
+    result = fetch_module_structure(course, str(tmp_path))
+
+    items = result["modules"][0]["items"]
+    synced = [i for i in items if i["type"] == "Page"]
+    assert len(synced) == 1
+    assert synced[0]["local_path"] == "06_Genomgangar/02_Click_alongs.qmd"
+    # And the live file is not also reported as local-only.
+    assert not [i for i in items if i["type"] == "LocalOnly"]

@@ -87,14 +87,32 @@ def fetch_module_structure(course, content_root: str,
     # Build last_synced lookup: rel_path -> last_synced_at ISO string
     id_to_local = {}
     path_to_last_synced = {}
+
+    def _still_on_disk(rel: str) -> bool:
+        return os.path.isfile(os.path.join(content_root, rel.replace('/', os.sep)))
+
+    def _claim(key, rel_path: str):
+        """Bind a Canvas id to a local path, preferring one that still exists.
+
+        Two paths can carry the same id. Renaming a file leaves the old key in
+        the map, and the title-search fallback in the handlers then re-attaches
+        the new name to the same Canvas page, so both keys point at it. Plain
+        last-write-wins let whichever sorted later win, which is how a deleted
+        file came to be listed as the synced one while the file actually on
+        disk was reported local-only.
+        """
+        incumbent = id_to_local.get(key)
+        if incumbent is None or (_still_on_disk(rel_path) and not _still_on_disk(incumbent)):
+            id_to_local[key] = rel_path
+
     for rel_path, entry in sync_map.items():
         if isinstance(entry, dict):
             canvas_id = entry.get('id')
             if canvas_id is not None:
-                id_to_local[canvas_id] = rel_path
-                id_to_local[str(canvas_id)] = rel_path
+                _claim(canvas_id, rel_path)
+                _claim(str(canvas_id), rel_path)
                 try:
-                    id_to_local[int(canvas_id)] = rel_path
+                    _claim(int(canvas_id), rel_path)
                 except (ValueError, TypeError):
                     pass
             last_synced = entry.get('last_synced_at', '')
